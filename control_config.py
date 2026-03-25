@@ -30,6 +30,12 @@ BUILTIN_PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
         },
         "telemetry": {
             "bootstrap_grace_sec": 20,
+            "metric_roles": {
+                "required_for_control": ["ph", "ec"],
+                "required_for_actuation_safety": ["water_level"],
+                "optional_context": ["temp", "humidity", "soil"],
+            },
+            "not_onboarded": [],
             "llm_min_fresh": {
                 "ph": ["ph"],
                 "ec": ["ec"],
@@ -63,6 +69,12 @@ BUILTIN_PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
         },
         "telemetry": {
             "bootstrap_grace_sec": 180,
+            "metric_roles": {
+                "required_for_control": ["ph", "ec"],
+                "required_for_actuation_safety": ["water_level"],
+                "optional_context": ["temp", "humidity", "soil"],
+            },
+            "not_onboarded": ["temp", "humidity", "soil", "water_level"],
             "llm_min_fresh": {
                 "ph": ["ph"],
                 "ec": ["ec"],
@@ -123,6 +135,37 @@ class RuntimeProfile:
     @property
     def safety_overrides(self) -> dict[str, Any]:
         return dict(self.settings.get("safety_overrides", {}))
+
+    @property
+    def telemetry_metric_roles(self) -> dict[str, list[str]]:
+        roles = self.settings.get("telemetry", {}).get("metric_roles", {})
+        return {
+            "required_for_control": list(roles.get("required_for_control", [])),
+            "required_for_actuation_safety": list(roles.get("required_for_actuation_safety", [])),
+            "optional_context": list(roles.get("optional_context", [])),
+        }
+
+    @property
+    def telemetry_not_onboarded(self) -> list[str]:
+        return list(self.settings.get("telemetry", {}).get("not_onboarded", []))
+
+    @property
+    def telemetry_all_expected(self) -> list[str]:
+        role_metrics: set[str] = set()
+        for metrics in self.telemetry_metric_roles.values():
+            role_metrics.update(metrics)
+        role_metrics.update(self.telemetry_not_onboarded)
+        return sorted(role_metrics)
+
+    def telemetry_roles_for_sensor(self, sensor: str) -> list[str]:
+        roles = []
+        for role_name, metrics in self.telemetry_metric_roles.items():
+            if sensor in metrics:
+                roles.append(role_name)
+        return roles
+
+    def telemetry_mode_partial(self) -> bool:
+        return bool(self.telemetry_not_onboarded)
 
     def llm_min_fresh(self, metric: str) -> list[str]:
         return list(self.settings.get("telemetry", {}).get("llm_min_fresh", {}).get(metric, [metric]))

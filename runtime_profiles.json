@@ -14,6 +14,12 @@
     },
     "telemetry": {
       "bootstrap_grace_sec": 20,
+      "metric_roles": {
+        "required_for_control": ["ph", "ec"],
+        "required_for_actuation_safety": ["water_level"],
+        "optional_context": ["temp", "humidity", "soil"]
+      },
+      "not_onboarded": [],
       "llm_min_fresh": {
         "ph": ["ph"],
         "ec": ["ec"]
@@ -51,6 +57,12 @@
     },
     "telemetry": {
       "bootstrap_grace_sec": 180,
+      "metric_roles": {
+        "required_for_control": ["ph", "ec"],
+        "required_for_actuation_safety": ["water_level"],
+        "optional_context": ["temp", "humidity", "soil"]
+      },
+      "not_onboarded": ["temp", "humidity", "soil", "water_level"],
       "llm_min_fresh": {
         "ph": ["ph"],
         "ec": ["ec"]

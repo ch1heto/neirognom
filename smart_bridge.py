@@ -214,14 +214,22 @@ class AlertEngine:
     def _mark_cd(self, key: str) -> None:
         self._cooldowns[key] = time.time()
 
-    def evaluate(self) -> dict[str, Any]:
+    def evaluate(self, telemetry_state: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         snapshot = self._agg.snapshot()
         critical_params, warning_params, silent_sensors = [], [], []
+        sensors_state = (telemetry_state or {}).get("sensors", {})
 
         for sensor, thresholds in THRESHOLDS.items():
             if sensor not in snapshot:
                 continue
-            if self._agg.is_silent(sensor):
+            state_info = sensors_state.get(sensor, {})
+            sensor_state = state_info.get("state")
+            roles = state_info.get("roles", [])
+            if sensor_state == "not_expected_yet":
+                continue
+            if sensor_state in {"expected_not_seen_yet", "stale_missing"} and "optional_context" in roles:
+                continue
+            if sensor_state in {"expected_not_seen_yet", "stale_missing"}:
                 silent_sensors.append(sensor)
                 continue
             val = snapshot[sensor]["last"]
@@ -378,6 +386,7 @@ class PromptBuilder:
             "control_scope": ["ph", "ec"],
             "telemetry": self._telemetry(snapshot),
             "telemetry_state": control_state.get("telemetry_state", {}),
+            "telemetry_profile": PROFILE.telemetry_metric_roles | {"not_onboarded": PROFILE.telemetry_not_onboarded},
             "stage_targets": {
                 "ph_range": stage_targets.get("ph_range"),
                 "ec_range": stage_targets.get("ec_range"),
@@ -606,7 +615,7 @@ class SmartMQTTBridge:
     def _eval_alerts(self) -> None:
         if not self._alert_engine.should_evaluate():
             return
-        self._alert_engine.evaluate()
+        self._alert_engine.evaluate(self._telemetry_state(self._aggregator.snapshot()))
 
     def _maybe_write_influx(self) -> None:
         now = time.time()
@@ -623,18 +632,23 @@ class SmartMQTTBridge:
         now = time.time()
         bootstrap_active = (now - self._telemetry_expected_since) < PROFILE.telemetry_bootstrap_grace_sec
         sensors: dict[str, dict[str, Any]] = {}
+        not_onboarded = set(PROFILE.telemetry_not_onboarded)
 
         for sensor in self._aggregator.SENSORS:
             data = snapshot.get(sensor) or {}
             last_ts = data.get("last_ts")
             age_sec: float | None = None
-            if last_ts is None:
+            roles = PROFILE.telemetry_roles_for_sensor(sensor)
+            if sensor in not_onboarded:
+                state = "not_expected_yet"
+            elif last_ts is None:
                 state = "not_expected_yet" if bootstrap_active else "expected_not_seen_yet"
             else:
                 age_sec = max(0.0, now - float(last_ts))
                 state = "stale_missing" if age_sec > self._control.sensor_silence_sec else "fresh"
 
             sensors[sensor] = {
+                "roles": roles,
                 "state": state,
                 "age_sec": round(age_sec, 1) if age_sec is not None else None,
                 "has_value": data.get("last") is not None,
@@ -660,6 +674,9 @@ class SmartMQTTBridge:
         return {
             "bootstrap_active": bootstrap_active,
             "bootstrap_grace_sec": PROFILE.telemetry_bootstrap_grace_sec,
+            "partial_mode": PROFILE.telemetry_mode_partial(),
+            "not_onboarded": PROFILE.telemetry_not_onboarded,
+            "metric_roles": PROFILE.telemetry_metric_roles,
             "sensors": sensors,
             "control_inputs": control_inputs,
         }
@@ -738,6 +755,12 @@ class SmartMQTTBridge:
         ec = (snapshot.get("ec") or {}).get("last")
         risks = control_state.get("risks", [])
         deviations = control_state.get("deviations", [])
+        telemetry_state = control_state.get("telemetry_state", {})
+        if telemetry_state.get("partial_mode"):
+            log.info(
+                "Heartbeat: partial telemetry mode active | not_onboarded=%s",
+                telemetry_state.get("not_onboarded", []),
+            )
         if not deviations and not risks:
             log.info(
                 "Heartbeat: bridge healthy, no pH/EC action needed | ph=%s ec=%s",
@@ -837,6 +860,15 @@ class SmartMQTTBridge:
         log.info("profile=%s", PROFILE.name)
         log.info("logging=%s", PROFILE.log_level)
         log.info("mqtt=%s:%d", MQTT_HOST, MQTT_PORT)
+        log.info(
+            "telemetry_profile control=%s actuation_safety=%s optional=%s not_onboarded=%s",
+            PROFILE.telemetry_metric_roles.get("required_for_control", []),
+            PROFILE.telemetry_metric_roles.get("required_for_actuation_safety", []),
+            PROFILE.telemetry_metric_roles.get("optional_context", []),
+            PROFILE.telemetry_not_onboarded,
+        )
+        if PROFILE.telemetry_mode_partial():
+            log.warning("Partial telemetry mode enabled: auto-actuation remains gated until safety telemetry becomes fresh")
         log.info("crop=%s  stage=%s  day=%d  tray=%s",
                  CURRENT_CROP, CURRENT_GROWTH_STAGE, CURRENT_GROWTH_DAY, TRAY_ID)
         log.info("OpenClaw: %s  Ollama fallback: %s", OPENCLAW_URL, OLLAMA_URL)
