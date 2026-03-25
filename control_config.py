@@ -35,9 +35,13 @@ BUILTIN_PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
                 "required_for_actuation_safety": ["water_level"],
                 "optional_context": ["temp", "humidity", "soil"],
             },
-            "not_onboarded": [],
+            "not_onboarded": ["temp", "humidity", "soil"],
+            "readiness_minimum": ["ph", "ec", "water_level"],
+            "observation_ready_sensors": ["ph", "ec"],
+            "reasoning_trigger_metrics": ["ph"],
+            "automated_metrics": ["ph"],
             "llm_min_fresh": {
-                "ph": ["ph"],
+                "ph": ["ph", "ec", "water_level"],
                 "ec": ["ec"],
             },
             "actuation_min_fresh": {
@@ -74,9 +78,13 @@ BUILTIN_PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
                 "required_for_actuation_safety": ["water_level"],
                 "optional_context": ["temp", "humidity", "soil"],
             },
-            "not_onboarded": ["temp", "humidity", "soil", "water_level"],
+            "not_onboarded": ["temp", "humidity", "soil"],
+            "readiness_minimum": ["ph", "ec", "water_level"],
+            "observation_ready_sensors": ["ph", "ec"],
+            "reasoning_trigger_metrics": ["ph"],
+            "automated_metrics": ["ph"],
             "llm_min_fresh": {
-                "ph": ["ph"],
+                "ph": ["ph", "ec", "water_level"],
                 "ec": ["ec"],
             },
             "actuation_min_fresh": {
@@ -156,6 +164,36 @@ class RuntimeProfile:
             role_metrics.update(metrics)
         role_metrics.update(self.telemetry_not_onboarded)
         return sorted(role_metrics)
+
+    @property
+    def readiness_minimum_sensors(self) -> list[str]:
+        sensors = self.settings.get("telemetry", {}).get("readiness_minimum")
+        if sensors:
+            return list(sensors)
+        metrics = set(self.telemetry_metric_roles.get("required_for_control", []))
+        metrics.update(self.telemetry_metric_roles.get("required_for_actuation_safety", []))
+        return sorted(metrics)
+
+    @property
+    def observation_ready_sensors(self) -> list[str]:
+        sensors = self.settings.get("telemetry", {}).get("observation_ready_sensors")
+        if sensors:
+            return list(sensors)
+        return list(self.telemetry_metric_roles.get("required_for_control", []))
+
+    @property
+    def reasoning_trigger_metrics(self) -> list[str]:
+        metrics = self.settings.get("telemetry", {}).get("reasoning_trigger_metrics")
+        if metrics:
+            return list(metrics)
+        return ["ph"]
+
+    @property
+    def automated_metrics(self) -> list[str]:
+        metrics = self.settings.get("telemetry", {}).get("automated_metrics")
+        if metrics:
+            return list(metrics)
+        return ["ph"]
 
     def telemetry_roles_for_sensor(self, sensor: str) -> list[str]:
         roles = []

@@ -297,10 +297,16 @@ class ControlSafetyManager:
                 continue
 
             metric_state = self._sensor_state(snapshot, metric)
-            reasoning_allowed = metric_state == "fresh"
+            llm_required = self._profile.llm_min_fresh(metric)
+            missing_llm_inputs = [sensor for sensor in llm_required if not self._sensor_fresh(snapshot, sensor)]
+            reasoning_allowed = metric in self._profile.reasoning_trigger_metrics and not missing_llm_inputs
             reasons = []
             if metric_state != "fresh":
                 reasons.append(f"telemetry_{metric_state}")
+            for sensor in missing_llm_inputs:
+                if sensor == metric:
+                    continue
+                reasons.append(f"control_input_missing:{sensor}")
             if metric in self._current_jump_issues:
                 reasons.append("implausible_jump")
             if metric in self._pending:
@@ -311,6 +317,8 @@ class ControlSafetyManager:
                 reasons.append("low_water")
             if not water_level_fresh:
                 reasons.append("water_level_unknown")
+            if metric not in self._profile.automated_metrics:
+                reasons.append("observation_only_stage1")
             if metric == "ec" and direction == "decrease":
                 ec_high = self._config.recovery_protocols.get("ec_high", {})
                 if ec_high.get("automated_action") is False:
@@ -323,6 +331,8 @@ class ControlSafetyManager:
                 "direction": direction,
                 "severity": self._level(metric, float(last)),
                 "reasoning_allowed": reasoning_allowed,
+                "llm_required_sensors": llm_required,
+                "missing_llm_inputs": missing_llm_inputs,
                 "telemetry_state": metric_state,
                 "blocked": bool(reasons),
                 "blocked_reasons": reasons,
@@ -381,6 +391,8 @@ class ControlSafetyManager:
             return True, ""
 
         metric, _ = effect
+        if metric not in self._profile.automated_metrics:
+            return False, f"observation_only_metric:{metric}"
         if not self._sensor_fresh(snapshot, metric):
             return False, f"metric_telemetry_unavailable:{metric}"
         if metric in self._escalations:

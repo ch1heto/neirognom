@@ -19,9 +19,13 @@
         "required_for_actuation_safety": ["water_level"],
         "optional_context": ["temp", "humidity", "soil"]
       },
-      "not_onboarded": [],
+      "not_onboarded": ["temp", "humidity", "soil"],
+      "readiness_minimum": ["ph", "ec", "water_level"],
+      "observation_ready_sensors": ["ph", "ec"],
+      "reasoning_trigger_metrics": ["ph"],
+      "automated_metrics": ["ph"],
       "llm_min_fresh": {
-        "ph": ["ph"],
+        "ph": ["ph", "ec", "water_level"],
         "ec": ["ec"]
       },
       "actuation_min_fresh": {
@@ -62,9 +66,13 @@
         "required_for_actuation_safety": ["water_level"],
         "optional_context": ["temp", "humidity", "soil"]
       },
-      "not_onboarded": ["temp", "humidity", "soil", "water_level"],
+      "not_onboarded": ["temp", "humidity", "soil"],
+      "readiness_minimum": ["ph", "ec", "water_level"],
+      "observation_ready_sensors": ["ph", "ec"],
+      "reasoning_trigger_metrics": ["ph"],
+      "automated_metrics": ["ph"],
       "llm_min_fresh": {
-        "ph": ["ph"],
+        "ph": ["ph", "ec", "water_level"],
         "ec": ["ec"]
       },
       "actuation_min_fresh": {

@@ -386,6 +386,7 @@ class PromptBuilder:
             "control_scope": ["ph", "ec"],
             "telemetry": self._telemetry(snapshot),
             "telemetry_state": control_state.get("telemetry_state", {}),
+            "readiness": control_state.get("telemetry_state", {}).get("readiness", {}),
             "telemetry_profile": PROFILE.telemetry_metric_roles | {"not_onboarded": PROFILE.telemetry_not_onboarded},
             "stage_targets": {
                 "ph_range": stage_targets.get("ph_range"),
@@ -639,7 +640,7 @@ class SmartMQTTBridge:
             last_ts = data.get("last_ts")
             age_sec: float | None = None
             roles = PROFILE.telemetry_roles_for_sensor(sensor)
-            if sensor in not_onboarded:
+            if last_ts is None and sensor in not_onboarded:
                 state = "not_expected_yet"
             elif last_ts is None:
                 state = "not_expected_yet" if bootstrap_active else "expected_not_seen_yet"
@@ -671,12 +672,49 @@ class SmartMQTTBridge:
                 "missing_for_actuation": missing_for_actuation,
             }
 
+        readiness_minimum = PROFILE.readiness_minimum_sensors
+        observation_ready_sensors = PROFILE.observation_ready_sensors
+        minimum_states = {sensor: sensors.get(sensor, {}).get("state", "not_expected_yet") for sensor in readiness_minimum}
+        observation_states = {sensor: sensors.get(sensor, {}).get("state", "not_expected_yet") for sensor in observation_ready_sensors}
+        minimum_seen = any((snapshot.get(sensor) or {}).get("last_ts") is not None for sensor in readiness_minimum)
+        minimum_all_fresh = all(state == "fresh" for state in minimum_states.values())
+        observation_all_fresh = all(state == "fresh" for state in observation_states.values())
+        minimum_has_stale = any(state == "stale_missing" for state in minimum_states.values())
+        ph_actuation_ready = control_inputs.get("ph", {}).get("auto_actuation_ready", False)
+
+        readiness_state = "partial_telemetry"
+        if not minimum_seen:
+            readiness_state = "waiting_for_device"
+        elif bootstrap_active and not minimum_all_fresh:
+            readiness_state = "bootstrap"
+        elif minimum_has_stale:
+            readiness_state = "degraded"
+        elif minimum_all_fresh and ph_actuation_ready:
+            readiness_state = "ready_for_actuation"
+        elif observation_all_fresh:
+            readiness_state = "ready_for_observation"
+
+        completeness = {
+            "minimum_required": readiness_minimum,
+            "minimum_states": minimum_states,
+            "observation_ready_sensors": observation_ready_sensors,
+            "observation_states": observation_states,
+        }
+
         return {
             "bootstrap_active": bootstrap_active,
             "bootstrap_grace_sec": PROFILE.telemetry_bootstrap_grace_sec,
             "partial_mode": PROFILE.telemetry_mode_partial(),
             "not_onboarded": PROFILE.telemetry_not_onboarded,
             "metric_roles": PROFILE.telemetry_metric_roles,
+            "readiness": {
+                "state": readiness_state,
+                "minimum_required": readiness_minimum,
+                "observation_ready_sensors": observation_ready_sensors,
+                "ph_reasoning_ready": control_inputs.get("ph", {}).get("llm_ready", False),
+                "ph_actuation_ready": ph_actuation_ready,
+            },
+            "completeness": completeness,
             "sensors": sensors,
             "control_inputs": control_inputs,
         }
@@ -688,7 +726,8 @@ class SmartMQTTBridge:
         control_state: dict[str, Any],
     ) -> None:
         details = (
-            f"{reason} | reasoning={control_state.get('reasoning_metrics', [])} "
+            f"{reason} | readiness={control_state.get('telemetry_state', {}).get('readiness', {}).get('state')} "
+            f"reasoning={control_state.get('reasoning_metrics', [])} "
             f"actionable={control_state.get('actionable_metrics', [])} "
             f"blocked={control_state.get('blocked_metrics', {})}"
         )
@@ -703,6 +742,7 @@ class SmartMQTTBridge:
                     "risks": control_state.get("risks", []),
                     "deviations": control_state.get("deviations", []),
                     "telemetry_state": control_state.get("telemetry_state", {}),
+                    "readiness": control_state.get("telemetry_state", {}).get("readiness", {}),
                 },
                 ensure_ascii=False,
             ),
@@ -756,21 +796,25 @@ class SmartMQTTBridge:
         risks = control_state.get("risks", [])
         deviations = control_state.get("deviations", [])
         telemetry_state = control_state.get("telemetry_state", {})
+        readiness = telemetry_state.get("readiness", {})
         if telemetry_state.get("partial_mode"):
             log.info(
-                "Heartbeat: partial telemetry mode active | not_onboarded=%s",
+                "Heartbeat: partial telemetry mode active | readiness=%s not_onboarded=%s",
+                readiness.get("state"),
                 telemetry_state.get("not_onboarded", []),
             )
         if not deviations and not risks:
             log.info(
-                "Heartbeat: bridge healthy, no pH/EC action needed | ph=%s ec=%s",
+                "Heartbeat: bridge healthy, no pH/EC action needed | readiness=%s ph=%s ec=%s",
+                readiness.get("state"),
                 round(float(ph), 3) if ph is not None else "n/a",
                 round(float(ec), 3) if ec is not None else "n/a",
             )
             return
 
         log.info(
-            "Heartbeat: no automatic policy call | deviations=%s risks=%s telemetry=%s",
+            "Heartbeat: no automatic policy call | readiness=%s deviations=%s risks=%s telemetry=%s",
+            readiness.get("state"),
             json.dumps(deviations, ensure_ascii=False),
             json.dumps(risks, ensure_ascii=False),
             json.dumps(control_state.get("telemetry_state", {}), ensure_ascii=False),
@@ -867,8 +911,15 @@ class SmartMQTTBridge:
             PROFILE.telemetry_metric_roles.get("optional_context", []),
             PROFILE.telemetry_not_onboarded,
         )
+        log.info(
+            "readiness_profile minimum=%s observation=%s reasoning_metrics=%s automated_metrics=%s",
+            PROFILE.readiness_minimum_sensors,
+            PROFILE.observation_ready_sensors,
+            PROFILE.reasoning_trigger_metrics,
+            PROFILE.automated_metrics,
+        )
         if PROFILE.telemetry_mode_partial():
-            log.warning("Partial telemetry mode enabled: auto-actuation remains gated until safety telemetry becomes fresh")
+            log.warning("Partial telemetry profile enabled: optional/not-onboarded metrics may be absent without failure")
         log.info("crop=%s  stage=%s  day=%d  tray=%s",
                  CURRENT_CROP, CURRENT_GROWTH_STAGE, CURRENT_GROWTH_DAY, TRAY_ID)
         log.info("OpenClaw: %s  Ollama fallback: %s", OPENCLAW_URL, OLLAMA_URL)
