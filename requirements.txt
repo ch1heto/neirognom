@@ -1,0 +1,5 @@
+paho-mqtt>=1.6.1
+requests>=2.31.0
+pydantic>=2.0.0
+influxdb-client>=1.43.0
+python-dotenv>=1.0.1

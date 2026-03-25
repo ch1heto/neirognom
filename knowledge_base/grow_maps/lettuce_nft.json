@@ -1,0 +1,407 @@
+{
+  "_meta": {
+    "crop": "Lettuce (Lactuca sativa)",
+    "systems": ["NFT", "DFT / Floating raft"],
+    "schema_version": "2.0",
+    "authors": ["Cornell CEA Program", "Oklahoma State Univ. Extension", "Wageningen Univ. & Research", "MSU / Univ. of Delaware"],
+    "source_documents": {
+      "DOC_A": {
+        "short": "Cornell-CEA",
+        "full": "Cornell Controlled Environment Agriculture — Hydroponic Lettuce Handbook",
+        "year": 2013,
+        "authors": ["Brechner, M.", "Both, A.J."]
+      },
+      "DOC_B": {
+        "short": "OSU-HLA6722",
+        "full": "Electrical Conductivity and pH Guide for Hydroponics, HLA-6722",
+        "year": 2016,
+        "authors": ["Singh, H.", "Bruce, D."],
+        "publisher": "Oklahoma Cooperative Extension Service"
+      },
+      "DOC_C": {
+        "short": "WUR-1315",
+        "full": "Guidelines for Cultivation in a Vertical Farm, Report WPR-1315",
+        "year": 2024,
+        "authors": ["Carpineti, C.", "Meinen, E.", "van Ruijven, J."],
+        "publisher": "Wageningen University & Research"
+      },
+      "DOC_D": {
+        "short": "MSU-DLI",
+        "full": "Photoperiod, Light Intensity and Daily Light Integral — Produce Grower, March 2022",
+        "year": 2022,
+        "authors": ["Kelly, N.", "Meng, Q.W.", "Runkle, E."]
+      }
+    },
+    "photoperiod_allowed_set": {
+      "values_hours": [16, 20, 24],
+      "rationale": "Derived from MSU/Univ. of Delaware experimental matrix (DOC_D, Table 1). Use these three values for DLI / energy optimisation calculations. Avoid assuming arbitrary intermediate values.",
+      "continuous_light_warning": {
+        "source": "DOC_C, §3.1",
+        "note": "Continuous 24 h lighting may cause necrosis, chlorosis and reduced photosynthesis in sensitive cultivars. Industry practice often favours light/dark cycles (e.g. 20/4 h). Lettuce is generally tolerant but cultivar screening is recommended before deploying 24 h."
+      }
+    }
+  },
+
+  "germination": {
+    "_stage_days": "Day 0 – Day 1 (first 24 h after sowing)",
+    "substrate_pretreatment": {
+      "rockwool_soak_ph": {
+        "value": 4.5,
+        "unit": "pH",
+        "type": "single_action_setpoint",
+        "note": "One-time soak before seeding; NOT the ongoing nutrient-solution pH.",
+        "source": { "doc": "DOC_A", "page": 20, "context": "Day 0 – Sowing", "type": "direct_instruction" }
+      }
+    },
+    "nutrient_solution": {
+      "ph_setpoint": {
+        "value": null,
+        "note": "No nutrient solution added during first 24 h; seeds irrigated with plain RO water only.",
+        "source": { "doc": "DOC_A", "page": 20, "context": "Day 0 – Sowing", "type": "direct_instruction" }
+      },
+      "ec_absolute": {
+        "value": null,
+        "unit": "dS/m",
+        "note": "No fertiliser added on Day 0.",
+        "source": { "doc": "DOC_A", "page": 20, "context": "Day 0", "type": "direct_instruction" }
+      },
+      "ec_increment_above_source_water": {
+        "value": null,
+        "unit": "dS/m",
+        "note": "Not applicable at this sub-stage."
+      }
+    },
+    "lighting": {
+      "ppfd_setpoint": {
+        "value": 50,
+        "unit": "µmol/m²/s",
+        "source": { "doc": "DOC_A", "page": 10, "context": "Configuration and Intensity — first 24 h in germination area", "type": "direct_instruction" }
+      },
+      "photoperiod_hours": {
+        "value": 24,
+        "from_allowed_set": true,
+        "note": "24 h specified for first 24 h to ensure germination. Cultivar risk of continuous-light intolerance is low at this stage.",
+        "source": { "doc": "DOC_A", "page": 10, "context": "Day 0", "type": "direct_instruction" }
+      },
+      "dli_target": {
+        "value": 4.3,
+        "unit": "mol/m²/d",
+        "calculation": "50 µmol/m²/s × 3600 s/h × 24 h / 1e6",
+        "note": "Low DLI is intentional — minimises medium drying and prevents seedling stretch."
+      },
+      "spectrum_note": {
+        "value": "Blue-rich (fluorescent CWF or broad-spectrum LED); avoid incandescent / red-heavy sources.",
+        "source": { "doc": "DOC_A", "page": 9, "context": "Germination Room lighting", "type": "direct_instruction" }
+      }
+    },
+    "climate": {
+      "temp_day_C": {
+        "range": [20.0, 20.0],
+        "setpoint": 20.0,
+        "source": { "doc": "DOC_A", "page": 20, "context": "Day 0 — germination room temperature set-point", "type": "direct_setpoint" }
+      },
+      "temp_night_C": {
+        "range": [18.0, 20.0],
+        "note": "No night set-point explicitly given for Day 0; value interpolated from Cornell daytime set-point and general CEA practice.",
+        "source": { "doc": "DOC_A", "page": 19, "context": "Set-points table (day/night 24/19 °C for pond stage used as bounding reference)", "type": "interpolated" }
+      },
+      "humidity_pct": {
+        "range": [85.0, 98.0],
+        "note": "Humidity covers kept on to prevent desiccation; target near saturation.",
+        "source": { "doc": "DOC_A", "page": 8, "context": "Day 0 – humidity covers required for bare seed", "type": "qualitative_converted" }
+      }
+    },
+    "irrigation": {
+      "method": "Sub-irrigation (Ebb & Flood) or overhead with breaker wand",
+      "frequency": "Every 12 h, 15 min flood, RO water only",
+      "source": { "doc": "DOC_A", "page": 20, "context": "Day 0", "type": "direct_instruction" }
+    }
+  },
+
+  "seedling": {
+    "_stage_days": "Day 1 – Day 11 (post-germination to transplant)",
+    "substrate_pretreatment": {
+      "rockwool_soak_ph": {
+        "value": null,
+        "note": "No repeated pre-treatment needed after Day 0 soak."
+      }
+    },
+    "nutrient_solution": {
+      "ph_setpoint": {
+        "value": 5.8,
+        "unit": "pH",
+        "acceptable_range": [5.6, 6.0],
+        "adjustment_chemicals": {
+          "down": "Nitric acid or pH-down product",
+          "up": "Potassium hydroxide (KOH)"
+        },
+        "source": { "doc": "DOC_A", "page": 21, "context": "Day 1 – fertiliser solution added; pH adjusted to 5.8", "type": "direct_setpoint" }
+      },
+      "ec_increment_above_source_water": {
+        "value": 1.2,
+        "unit": "dS/m",
+        "note": "Cornell specifies 1200 µS/cm (= 1.2 dS/m) ABOVE source-water EC, not absolute EC. Must subtract source-water baseline when reading sensor.",
+        "source": { "doc": "DOC_A", "pages": [12, 21], "context": "Pond Solution / Day 1 sub-irrigation EC", "type": "direct_setpoint" }
+      },
+      "ec_absolute_reference": {
+        "range": [1.2, 1.8],
+        "unit": "dS/m",
+        "note": "General reference range for lettuce in hydroponics from OSU table (Table 2). Use as sanity-check against increment value.",
+        "source": { "doc": "DOC_B", "page": 2, "context": "Table 2 — Optimum EC range for Lettuce", "type": "crop_table_reference" }
+      }
+    },
+    "lighting": {
+      "ppfd_setpoint": {
+        "value": 250,
+        "unit": "µmol/m²/s",
+        "source": { "doc": "DOC_A", "page": 10, "context": "Days 1–11 — light intensity maintained at 250 µmol/m²/s", "type": "direct_setpoint" }
+      },
+      "photoperiod_hours": {
+        "value": 24,
+        "from_allowed_set": true,
+        "note": "Continuous light specified for seedling stage at Cornell. Monitor for stretch; blue-rich spectrum counteracts elongation risk.",
+        "source": { "doc": "DOC_A", "page": 10, "context": "Photoperiod 24 h maintained for remaining 10 days in germination area", "type": "direct_setpoint" }
+      },
+      "dli_target": {
+        "value": 21.6,
+        "unit": "mol/m²/d",
+        "calculation": "250 µmol/m²/s × 3600 × 24 / 1e6",
+        "acceptable_range_note": "Cornell states ~22 mol/m²/d; anecdotal tolerance up to 30 mol/m²/d for some cultivars.",
+        "source": { "doc": "DOC_A", "page": 10, "context": "~22 mol/m²/d target with 24 h photoperiod", "type": "direct_setpoint" }
+      },
+      "spectrum_note": {
+        "value": "Blue-rich spectrum; fluorescent CWF or broad-spectrum LED preferred. Incandescent lamps cause etiolation.",
+        "source": { "doc": "DOC_A", "page": 9, "context": "Germination Room — fluorescent vs incandescent", "type": "direct_instruction" }
+      }
+    },
+    "climate": {
+      "temp_day_C": {
+        "range": [22.0, 25.0],
+        "setpoint": 25.0,
+        "note": "Temperature raised to 25 °C from Day 1 onwards in germination area.",
+        "source": { "doc": "DOC_A", "page": 21, "context": "Day 1 — temperature raised to 25 °C", "type": "direct_setpoint" }
+      },
+      "temp_night_C": {
+        "range": [18.0, 20.0],
+        "note": "Inferred from Cornell pond-stage night set-point (19 °C) as lower bound; 24 h photoperiod means no true night period at this stage.",
+        "source": { "doc": "DOC_A", "page": 19, "context": "Set-points: Day 24 °C / Night 19 °C (pond area reference)", "type": "interpolated" }
+      },
+      "humidity_pct": {
+        "range": [50.0, 75.0],
+        "note": "Covers removed on Day 2; target drops to normal operating range. High humidity encourages botrytis.",
+        "source": { "doc": "DOC_A", "page": 21, "context": "Day 2 — humidity covers removed", "type": "qualitative_converted" },
+        "secondary_source": { "doc": "DOC_A", "page": 19, "context": "Set-points: RH minimum 50%, maximum 70%", "type": "direct_setpoint" }
+      }
+    },
+    "irrigation": {
+      "method": "Sub-irrigation (Ebb & Flood) or overhead breaker wand",
+      "frequency_days_1_to_5": "Every 12 h, 15 min flood",
+      "frequency_days_6_to_11": "Every 6 h, 15 min flood (increased demand as canopy grows)",
+      "source": { "doc": "DOC_A", "pages": [20, 22], "context": "Day 1 and Day 6 irrigation schedule", "type": "direct_instruction" }
+    }
+  },
+
+  "vegetative": {
+    "_stage_days": "Day 11 – Day 28 (transplant to pond → pre-harvest phase)",
+    "substrate_pretreatment": {
+      "note": "Not applicable for pond / NFT / DFT systems."
+    },
+    "nutrient_solution": {
+      "ph_setpoint": {
+        "value": 5.8,
+        "unit": "pH",
+        "acceptable_range": [5.6, 6.2],
+        "note": "pH 5.8 considered optimum for described lettuce system (Cornell). WUR gives acceptable range 4.5–6.5 but notes prolonged excursion causes crop damage and dripper clogging.",
+        "source_primary": { "doc": "DOC_A", "page": 18, "context": "pH section — pH 5.8 optimum, 5.6–6.0 acceptable range", "type": "direct_setpoint" },
+        "source_secondary": { "doc": "DOC_C", "page": 19, "context": "§5.5 Nutrient solution — acceptable pH 4.5–6.5; target ~5.5 for most crops", "type": "guideline" }
+      },
+      "ec_increment_above_source_water": {
+        "value": 1.2,
+        "unit": "dS/m",
+        "note": "Maintained at same increment as seedling stage. Cornell: 1150–1250 µS/cm above source.",
+        "source": { "doc": "DOC_A", "page": 20, "context": "EC set-point: 1150–1250 µS/cm above source water", "type": "direct_setpoint" }
+      },
+      "ec_absolute": {
+        "range": [1.2, 1.8],
+        "unit": "dS/m",
+        "note": "OSU table gives 1.2–1.8 dS/m absolute for lettuce. WUR notes EC ~1.0–2.5 dS/m normal range depending on crop and growth stage.",
+        "source_primary": { "doc": "DOC_B", "page": 2, "context": "Table 2 — Lettuce EC 1.2–1.8 dS/m", "type": "crop_table_reference" },
+        "source_secondary": { "doc": "DOC_C", "page": 19, "context": "Table 4 — normal EC range 1.0–2.5 dS/m", "type": "guideline" }
+      }
+    },
+    "lighting": {
+      "ppfd_options": [
+        {
+          "ppfd": 120, "photoperiod_h": 20, "dli": 8.6, "unit": "mol/m²/d",
+          "note": "Low intensity, moderate photoperiod — energy-efficient option."
+        },
+        {
+          "ppfd": 150, "photoperiod_h": 20, "dli": 10.8, "unit": "mol/m²/d",
+          "note": "Balanced baseline treatment used in MSU experiments."
+        },
+        {
+          "ppfd": 180, "photoperiod_h": 20, "dli": 13.0, "unit": "mol/m²/d",
+          "note": "Good yield/energy ratio. At DLI 15.6 mol/m²/d, lower PPFD × longer photoperiod outperformed higher PPFD × shorter."
+        },
+        {
+          "ppfd": 180, "photoperiod_h": 24, "dli": 15.6, "unit": "mol/m²/d",
+          "note": "Highest yield treatment in MSU study; continuous light risk must be screened per cultivar."
+        }
+      ],
+      "recommended_default": {
+        "ppfd": 180,
+        "photoperiod_hours": 20,
+        "from_allowed_set": true,
+        "dli_target": 13.0,
+        "unit": "mol/m²/d",
+        "rationale": "Best yield-per-energy compromise from MSU dataset; avoids continuous-light physiology risk flagged by WUR."
+      },
+      "dli_range": {
+        "min": 8.6,
+        "max": 17.0,
+        "unit": "mol/m²/d",
+        "upper_reference": "Cornell operational target 17 mol/m²/d with supplemental HPS; MSU max tested 15.6 mol/m²/d with LEDs.",
+        "source_primary": { "doc": "DOC_D", "page": 1, "context": "Table 1 — DLI treatments from 6.9 to 15.6 mol/m²/d", "type": "experimental_matrix" },
+        "source_secondary": { "doc": "DOC_A", "page": 13, "context": "Pond area lighting — 17 mol/m²/d target", "type": "operational_setpoint" }
+      },
+      "tipburn_airflow_dependency": {
+        "value": true,
+        "note": "Cornell could not exceed 12 mol/m²/d without vertical downward airflow before tipburn occurred. Paddle fans blowing 140 CFM/ft² of pond area are required when targeting DLI > 12 mol/m²/d.",
+        "source": { "doc": "DOC_A", "page": 14, "context": "Paddle Fan — tipburn prevention", "type": "direct_instruction" }
+      },
+      "spectrum_recommendation": {
+        "value": "50% warm-white + 50% red (peak 664 nm) for production; broad spectrum (blue 5–10%, green ~10%, red ~80%) as safe baseline.",
+        "source_primary": { "doc": "DOC_D", "page": 2, "context": "Experimental spectrum: 50% WW + 50% red LEDs", "type": "experimental_condition" },
+        "source_secondary": { "doc": "DOC_C", "page": 12, "context": "§3.3 — safe spectrum recommendation", "type": "guideline" }
+      }
+    },
+    "climate": {
+      "temp_day_C": {
+        "setpoint": 24.0,
+        "range": [22.0, 25.0],
+        "note": "Maximum dry weight production at 24 °C air / 24 °C water (Thompson et al. cited in Cornell). Growth rate declines above 31 °C; cool water can partially compensate high air temperature.",
+        "source": { "doc": "DOC_A", "page": 19, "context": "Set-points — Air Temperature 24 °C Day", "type": "direct_setpoint" }
+      },
+      "temp_night_C": {
+        "setpoint": 19.0,
+        "range": [17.0, 20.0],
+        "source": { "doc": "DOC_A", "page": 19, "context": "Set-points — Night 19 °C (65 °F)", "type": "direct_setpoint" }
+      },
+      "water_temp_C": {
+        "setpoint": 24.0,
+        "max_alert": 25.0,
+        "cooling_trigger": 26.0,
+        "source": { "doc": "DOC_A", "page": 19, "context": "Water Temperature — no higher than 25 °C, cool at 26 °C, heat at 24 °C", "type": "direct_setpoint" }
+      },
+      "humidity_pct": {
+        "range": [50.0, 70.0],
+        "source": { "doc": "DOC_A", "page": 19, "context": "Set-points — RH minimum 50%, no higher than 70%", "type": "direct_setpoint" }
+      },
+      "co2_ppm": {
+        "setpoint_light_period": 1500,
+        "setpoint_dark_period": 390,
+        "note": "CO2 enrichment to 1000–1500 ppm accelerates growth; supply from liquid CO2 tank (not heaters — contaminants slow lettuce growth).",
+        "source": { "doc": "DOC_A", "page": 17, "context": "§3.1 CO2 — 1500 ppm if light available", "type": "direct_setpoint" }
+      },
+      "dissolved_oxygen_ppm": {
+        "setpoint": 7.0,
+        "minimum_critical": 3.0,
+        "note": "Crop failure risk below 3 ppm. Supply pure O2 to pond; air-stone aeration insufficient for high-density production.",
+        "source": { "doc": "DOC_A", "page": 19, "context": "Set-points — DO 7 ppm; crop failure < 3 ppm", "type": "direct_setpoint" }
+      },
+      "airflow": {
+        "vertical_downward_cfm_per_sqft": 140,
+        "note": "Paddle fan mandatory above DLI 12 mol/m²/d to drive transpiration and prevent tipburn via calcium transport.",
+        "source": { "doc": "DOC_A", "page": 14, "context": "Paddle Fan — 140 CFM/ft² pond area", "type": "direct_setpoint" }
+      }
+    }
+  },
+
+  "harvest": {
+    "_stage_days": "Day 28 – Day 35 (pre-harvest maintenance → cutting)",
+    "substrate_pretreatment": {
+      "note": "Not applicable."
+    },
+    "nutrient_solution": {
+      "ph_setpoint": {
+        "value": 5.8,
+        "unit": "pH",
+        "acceptable_range": [5.6, 6.2],
+        "note": "Maintain same setpoint as vegetative stage. Do not initiate new long-duration chemical corrections within 7 days of harvest.",
+        "source": { "doc": "DOC_A", "page": 19, "context": "pH set-point 5.6–6.0 (general operational range)", "type": "direct_setpoint" }
+      },
+      "ec_increment_above_source_water": {
+        "value": 1.2,
+        "unit": "dS/m",
+        "source": { "doc": "DOC_A", "page": 20, "context": "EC 1150–1250 µS/cm above source water (general operational)", "type": "direct_setpoint" }
+      },
+      "ec_absolute": {
+        "range": [1.2, 1.8],
+        "unit": "dS/m",
+        "note": "Slight EC elevation towards upper bound can marginally improve leaf quality but reduces yield. Do not raise EC > 2.0 dS/m near harvest.",
+        "source": { "doc": "DOC_B", "page": 2, "context": "Table 2 — Lettuce EC 1.2–1.8 dS/m", "type": "crop_table_reference" }
+      },
+      "solution_refresh": {
+        "recommendation": "Full nutrient solution replacement every 14 days to prevent accumulation of sodium and other non-absorbed ions.",
+        "source": { "doc": "DOC_B", "page": 3, "context": "Refreshing the Nutrient Solution — replace completely every two weeks", "type": "direct_instruction" }
+      }
+    },
+    "lighting": {
+      "ppfd_setpoint": {
+        "value": 180,
+        "unit": "µmol/m²/s"
+      },
+      "photoperiod_hours": {
+        "value": 16,
+        "from_allowed_set": true,
+        "note": "Reduced to 16 h as energy-saving measure; DLI still adequate for final head fill. Avoids new stress induction days before harvest.",
+        "source": { "doc": "DOC_D", "page": 1, "context": "Table 1 — 16 h photoperiod treatments tested (MSU); WUR industry note: electricity cost discourages extended photoperiod near end of cycle", "type": "derived_from_experimental_matrix" }
+      },
+      "dli_target": {
+        "value": 10.4,
+        "unit": "mol/m²/d",
+        "calculation": "180 µmol/m²/s × 3600 × 16 / 1e6"
+      }
+    },
+    "climate": {
+      "temp_day_C": {
+        "range": [20.0, 24.0],
+        "setpoint": 22.0,
+        "note": "Lower end of range accepted to slow respiration and extend post-harvest shelf life.",
+        "source": { "doc": "DOC_A", "page": 19, "context": "Air Temperature set-point 24 °C Day — maintained; slight reduction for quality is common practice", "type": "interpolated" }
+      },
+      "temp_night_C": {
+        "range": [17.0, 19.0],
+        "setpoint": 19.0,
+        "source": { "doc": "DOC_A", "page": 19, "context": "Set-points Night 19 °C", "type": "direct_setpoint" }
+      },
+      "water_temp_C": {
+        "setpoint": 24.0,
+        "max_alert": 25.0,
+        "source": { "doc": "DOC_A", "page": 19, "context": "Water temperature — no higher than 25 °C", "type": "direct_setpoint" }
+      },
+      "humidity_pct": {
+        "range": [50.0, 70.0],
+        "source": { "doc": "DOC_A", "page": 19, "context": "RH 50–70%", "type": "direct_setpoint" }
+      },
+      "co2_ppm": {
+        "setpoint_light_period": 1500,
+        "note": "Maintain enrichment until lights-out on harvest day to maximise final biomass accumulation.",
+        "source": { "doc": "DOC_A", "page": 17, "context": "CO2 1500 ppm if light available", "type": "direct_setpoint" }
+      },
+      "dissolved_oxygen_ppm": {
+        "setpoint": 7.0,
+        "minimum_critical": 3.0,
+        "source": { "doc": "DOC_A", "page": 19, "context": "DO 7 ppm; crop failure < 3 ppm", "type": "direct_setpoint" }
+      }
+    },
+    "post_harvest": {
+      "storage_temp_C": 4.0,
+      "storage_temp_F": 40.0,
+      "float_sanitation": "Clean Styrofoam floats with 2% bleach solution between crop cycles.",
+      "target_fresh_weight_g": 150,
+      "harvest_day": 35,
+      "source": { "doc": "DOC_A", "pages": [25, 26], "context": "Day 35 harvest; post-harvest storage 40 °F; float cleaning", "type": "direct_instruction" }
+    }
+  }
+}

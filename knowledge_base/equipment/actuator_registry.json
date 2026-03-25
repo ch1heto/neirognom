@@ -1,0 +1,76 @@
+{
+  "_meta": {
+    "description": "Реестр разрешённых актуаторов системы Нейроагроном. Агент обязан проверять этот файл перед выдачей команд.",
+    "tray_id": "tray01",
+    "version": "1.0"
+  },
+  "actuators": {
+    "ph_down_pump": {
+      "description": "Насос дозировки pH-Down (кислота для понижения pH)",
+      "allowed_actions": ["ON", "OFF"],
+      "mqtt_topic": "farm/tray01/cmd/chemical/ph_down",
+      "max_duration_sec": 30,
+      "unit": "relay",
+      "safety_note": "Никогда не включать одновременно с ph_up_pump. Максимум 30 сек за один раз."
+    },
+    "ph_up_pump": {
+      "description": "Насос дозировки pH-Up (щёлочь для повышения pH)",
+      "allowed_actions": ["ON", "OFF"],
+      "mqtt_topic": "farm/tray01/cmd/chemical/ph_up",
+      "max_duration_sec": 30,
+      "unit": "relay",
+      "safety_note": "Никогда не включать одновременно с ph_down_pump."
+    },
+    "nutrient_a": {
+      "description": "Насос дозировки питательного раствора A (макроэлементы: Ca, N)",
+      "allowed_actions": ["ON", "OFF"],
+      "mqtt_topic": "farm/tray01/cmd/chemical/nutrient_a",
+      "max_duration_sec": 60,
+      "unit": "relay"
+    },
+    "nutrient_b": {
+      "description": "Насос дозировки питательного раствора B (микроэлементы, P, K, Mg)",
+      "allowed_actions": ["ON", "OFF"],
+      "mqtt_topic": "farm/tray01/cmd/chemical/nutrient_b",
+      "max_duration_sec": 60,
+      "unit": "relay"
+    },
+    "main_pump": {
+      "description": "Главный циркуляционный насос питательного раствора",
+      "allowed_actions": ["ON", "OFF"],
+      "mqtt_topic": "farm/tray01/cmd/pump/main",
+      "max_duration_sec": null,
+      "unit": "relay",
+      "safety_note": "Не выключать более чем на 30 минут — корни высохнут."
+    },
+    "main_light": {
+      "description": "Основное освещение (LED-панели)",
+      "allowed_actions": ["ON", "OFF", "DIM_50"],
+      "mqtt_topic": "farm/tray01/cmd/light/main",
+      "max_duration_sec": null,
+      "unit": "relay_or_pwm"
+    },
+    "drain_valve": {
+      "description": "Дренажный клапан для слива раствора",
+      "allowed_actions": ["OPEN", "CLOSE"],
+      "mqtt_topic": "farm/tray01/cmd/valve/drain",
+      "max_duration_sec": 120,
+      "unit": "valve",
+      "safety_note": "Открывать только если water_level > 25%. Не открывать при работающем главном насосе без контроля оператора."
+    },
+    "fan": {
+      "description": "Вентилятор принудительной циркуляции воздуха (защита от типбёрна)",
+      "allowed_actions": ["ON", "OFF"],
+      "mqtt_topic": "farm/tray01/cmd/fan/main",
+      "max_duration_sec": null,
+      "unit": "relay"
+    }
+  },
+  "conflict_rules": [
+    {
+      "actuators": ["ph_down_pump", "ph_up_pump"],
+      "rule": "NEVER_SIMULTANEOUS",
+      "reason": "Одновременное включение нейтрализует эффект и создаёт нестабильность pH"
+    }
+  ]
+}

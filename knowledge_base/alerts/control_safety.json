@@ -1,0 +1,34 @@
+{
+  "_meta": {
+    "description": "Deterministic safety settings for hybrid pH/EC control.",
+    "version": "1.0",
+    "scope": ["ph", "ec"]
+  },
+  "heartbeat_sec": 60,
+  "sensor_silence_sec": 300,
+  "low_water_pct_for_correction": 30.0,
+  "implausible_jump_thresholds": {
+    "ph": 0.4,
+    "ec": 0.5,
+    "temp": 4.0,
+    "humidity": 15.0,
+    "water_level": 12.0,
+    "soil": 20.0
+  },
+  "effect_tracking": {
+    "ph": {
+      "default_recheck_sec": 900,
+      "minimum_effect": 0.05,
+      "wrong_direction_margin": 0.03
+    },
+    "ec": {
+      "default_recheck_sec": 1200,
+      "minimum_effect": 0.08,
+      "wrong_direction_margin": 0.05
+    }
+  },
+  "escalation": {
+    "max_failed_effect_cycles": 2,
+    "max_implausible_jump_events": 2
+  }
+}

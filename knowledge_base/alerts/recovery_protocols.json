@@ -1,0 +1,84 @@
+{
+  "_meta": {
+    "description": "Протоколы восстановления для системы Нейроагроном. Используются при CRITICAL и EMERGENCY ситуациях.",
+    "version": "1.0"
+  },
+  "protocols": {
+    "ph_high": {
+      "trigger": "pH > warning_high (6.5)",
+      "severity_map": {
+        "WARNING":   { "actuator": "ph_down_pump", "duration_sec": 5,  "wait_min": 15, "recheck": true },
+        "CRITICAL":  { "actuator": "ph_down_pump", "duration_sec": 10, "wait_min": 10, "recheck": true },
+        "EMERGENCY": { "actuator": "ph_down_pump", "duration_sec": 15, "wait_min": 5,  "recheck": true,
+                       "operator_alert": true, "note": "При pH > 8.0 рассмотреть полную замену раствора" }
+      },
+      "max_consecutive_doses": 3,
+      "escalation_note": "Если 3 дозы не дали результата — скорее всего истощён буферный раствор pH-Down. Уведомить оператора."
+    },
+    "ph_low": {
+      "trigger": "pH < warning_low (5.5)",
+      "severity_map": {
+        "WARNING":   { "actuator": "ph_up_pump", "duration_sec": 5,  "wait_min": 15, "recheck": true },
+        "CRITICAL":  { "actuator": "ph_up_pump", "duration_sec": 10, "wait_min": 10, "recheck": true },
+        "EMERGENCY": { "actuator": "ph_up_pump", "duration_sec": 15, "wait_min": 5,  "recheck": true,
+                       "operator_alert": true }
+      },
+      "max_consecutive_doses": 3
+    },
+    "ec_low": {
+      "trigger": "EC < warning_low (1.0 dS/m)",
+      "severity_map": {
+        "WARNING":   { "actuator": "nutrient_a", "duration_sec": 10, "also": "nutrient_b", "wait_min": 20 },
+        "CRITICAL":  { "actuator": "nutrient_a", "duration_sec": 20, "also": "nutrient_b", "wait_min": 15,
+                       "note": "Проверить уровень воды — возможно разбавление из-за долива" },
+        "EMERGENCY": { "actuator": "nutrient_a", "duration_sec": 30, "also": "nutrient_b", "wait_min": 10,
+                       "operator_alert": true, "note": "Рассмотреть полную замену раствора" }
+      },
+      "max_consecutive_doses": 2
+    },
+    "ec_high": {
+      "trigger": "EC > warning_high (2.5 dS/m)",
+      "severity_map": {
+        "WARNING":   { "action": "dilute_with_water", "note": "Добавить RO воду. Актуатор: долив вручную." },
+        "CRITICAL":  { "action": "dilute_with_water", "operator_alert": true,
+                       "note": "Немедленный долив RO воды. При EC > 3.5 — частичная замена раствора." }
+      },
+      "automated_action": false,
+      "note": "Автоматического актуатора долива воды нет. Только уведомление оператора."
+    },
+    "water_level_low": {
+      "trigger": "water_level < warning_low (30%)",
+      "severity_map": {
+        "WARNING":   { "action": "notify_operator", "note": "Запланировать долив в течение 2 часов" },
+        "CRITICAL":  { "action": "notify_operator", "operator_alert": true,
+                       "note": "Немедленный долив. Проверить main_pump — возможна утечка." },
+        "EMERGENCY": { "action": "notify_operator", "operator_alert": true,
+                       "note": "КРИТИЧНО: корни оголяются. Остановить main_light для снижения испарения." }
+      },
+      "automated_action": false
+    },
+    "temp_high": {
+      "trigger": "temp > warning_high (28°C)",
+      "severity_map": {
+        "WARNING":   { "actuator": "fan", "action": "ON", "note": "Увеличить вентиляцию" },
+        "CRITICAL":  { "actuator": "fan", "action": "ON", "operator_alert": true,
+                       "note": "Проверить систему охлаждения. При T > 32°C — снизить DIM_50 освещение." },
+        "EMERGENCY": { "actuator": "main_light", "action": "DIM_50", "operator_alert": true,
+                       "note": "Снизить тепловую нагрузку от освещения. T > 35°C — угроза урожаю." }
+      }
+    },
+    "sensor_silent": {
+      "trigger": "Датчик молчит > 5 минут",
+      "response": {
+        "action": "notify_operator",
+        "operator_alert": true,
+        "note": "Возможна потеря связи с ESP32. Проверить питание и MQTT-соединение. Переход в fallback-режим через 3 неудачных запроса к LLM."
+      }
+    }
+  },
+  "general_rules": {
+    "solution_refresh_interval_days": 14,
+    "ph_check_after_ec": true,
+    "note": "pH всегда проверять ПОСЛЕ корректировки EC. EC меняет pH раствора."
+  }
+}

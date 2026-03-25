@@ -1,0 +1,20 @@
+Return exactly this JSON object:
+
+{
+  "situation_summary": "short factual summary",
+  "selected_control_strategy": "strategy choice for pH/EC correction",
+  "risks": ["risk or caution"],
+  "commands": [
+    {
+      "actuator": "logical actuator name from actuator_capabilities",
+      "action": "ON | OFF | OPEN | CLOSE | DIM_50",
+      "duration_sec": 5,
+      "reason": "short reason"
+    }
+  ],
+  "recheck_interval_sec": 900,
+  "stop_conditions": ["condition that should stop auto-recovery or require operator"]
+}
+
+If no action is needed or safe, return "commands": [].
+Do not add markdown or extra text.
