@@ -71,6 +71,18 @@ def init_db() -> None:
                 changed_at INTEGER NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS control_events (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts           INTEGER NOT NULL,
+                event_type   TEXT    NOT NULL,
+                source       TEXT    NOT NULL,
+                metric       TEXT,
+                status       TEXT,
+                details      TEXT,
+                context_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_control_events_ts ON control_events(ts);
+
             CREATE TABLE IF NOT EXISTS influx_buffer (
                 id       INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts       INTEGER NOT NULL,
@@ -87,7 +99,7 @@ def _maintenance() -> None:
     cutoff = int(time.time()) - DB_RETENTION_DAYS * 86400
     with _lock:
         conn = get_conn()
-        for tbl in ("alerts", "llm_requests", "commands"):
+        for tbl in ("alerts", "llm_requests", "commands", "control_events"):
             conn.execute(f"DELETE FROM {tbl} WHERE ts < ?", (cutoff,))
         conn.execute("DELETE FROM influx_buffer WHERE retries >= 10")
         conn.commit()
@@ -148,6 +160,45 @@ def save_command(
         )
         conn.commit()
         conn.close()
+
+
+def save_control_event(
+    event_type: str,
+    source: str,
+    metric: Optional[str] = None,
+    status: Optional[str] = None,
+    details: str = "",
+    context_json: str = "",
+) -> None:
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "INSERT INTO control_events(ts,event_type,source,metric,status,details,context_json)"
+            " VALUES(?,?,?,?,?,?,?)",
+            (
+                int(time.time()),
+                event_type[:80],
+                source[:80],
+                metric[:40] if metric else None,
+                status[:40] if status else None,
+                details[:500],
+                context_json[:4000],
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+
+def get_recent_control_events(limit: int = 50) -> list[dict]:
+    with _lock:
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT ts,event_type,source,metric,status,details,context_json"
+            " FROM control_events ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
 
 
 def update_actuator_state(actuator: str, state: str) -> None:

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from control_config import KnowledgeBaseConfig
+import database as db
 
 log = logging.getLogger("control_runtime")
 
@@ -103,6 +104,13 @@ class ControlSafetyManager:
                 issue = f"{sensor} jump too large ({prev} -> {last})"
                 self._current_jump_issues[sensor] = issue
                 log.warning("Implausible jump detected: %s", issue)
+                db.save_control_event(
+                    "sensor_anomaly",
+                    "control_runtime",
+                    metric=sensor,
+                    status="implausible_jump",
+                    details=issue,
+                )
                 if sensor in self.CONTROL_METRICS and self._jump_counts[sensor] >= max_events:
                     self._set_escalation(sensor, issue)
             else:
@@ -148,6 +156,13 @@ class ControlSafetyManager:
                     pending.actuator,
                     delta,
                 )
+                db.save_control_event(
+                    "effect_check",
+                    "control_runtime",
+                    metric=metric,
+                    status="effective",
+                    details=f"{pending.actuator} delta={round(delta, 4)}",
+                )
             else:
                 self._effect_failures[metric] = self._effect_failures.get(metric, 0) + 1
                 status = "wrong_direction" if wrong_direction else "no_effect"
@@ -169,6 +184,16 @@ class ControlSafetyManager:
                     delta,
                     self._effect_failures[metric],
                 )
+                db.save_control_event(
+                    "effect_check",
+                    "control_runtime",
+                    metric=metric,
+                    status=status,
+                    details=(
+                        f"{pending.actuator} delta={round(delta, 4)} "
+                        f"failures={self._effect_failures[metric]}"
+                    ),
+                )
                 if wrong_direction or self._effect_failures[metric] >= max_failed:
                     self._set_escalation(metric, f"{status} after {pending.actuator}")
 
@@ -184,6 +209,13 @@ class ControlSafetyManager:
             "since": time.time(),
         }
         log.error("Operator escalation activated: metric=%s reason=%s", metric, reason)
+        db.save_control_event(
+            "escalation",
+            "control_runtime",
+            metric=metric,
+            status="operator_required",
+            details=reason,
+        )
 
     def _is_silent(self, snapshot: dict[str, Any], sensor: str) -> bool:
         ts = (snapshot.get(sensor) or {}).get("last_ts")
@@ -385,6 +417,63 @@ class ControlSafetyManager:
                     "reason": pending.reason,
                 }
             )
+            db.save_control_event(
+                "dose_registered",
+                "control_runtime",
+                metric=metric,
+                status="pending_effect",
+                details=f"{actuator} recheck={pending.recheck_after_sec}s",
+            )
 
     def reset_effect_failures(self, metric: str) -> None:
         self._effect_failures[metric] = 0
+
+    def reset_metric(self, metric: str, operator: str = "operator") -> bool:
+        if metric not in self.CONTROL_METRICS:
+            return False
+
+        changed = False
+        if metric in self._escalations:
+            del self._escalations[metric]
+            changed = True
+        if metric in self._pending:
+            del self._pending[metric]
+            changed = True
+        if metric in self._last_effect_results:
+            del self._last_effect_results[metric]
+            changed = True
+        self._effect_failures[metric] = 0
+        self._jump_counts[metric] = 0
+        self._current_jump_issues.pop(metric, None)
+
+        db.save_control_event(
+            "operator_reset",
+            "control_runtime",
+            metric=metric,
+            status="applied" if changed else "noop",
+            details=f"reset by {operator}",
+        )
+        return changed
+
+    def reset_all(self, operator: str = "operator") -> list[str]:
+        reset_metrics = []
+        for metric in self.CONTROL_METRICS:
+            if self.reset_metric(metric, operator=operator):
+                reset_metrics.append(metric)
+        if not reset_metrics:
+            db.save_control_event(
+                "operator_reset",
+                "control_runtime",
+                metric="all",
+                status="noop",
+                details=f"reset by {operator}",
+            )
+        return reset_metrics
+
+    def state_snapshot(self) -> dict[str, Any]:
+        return {
+            "pending_effects": [pending.to_dict() for pending in self._pending.values()],
+            "escalations": list(self._escalations.values()),
+            "effect_failures": dict(self._effect_failures),
+            "last_effect_results": dict(self._last_effect_results),
+        }

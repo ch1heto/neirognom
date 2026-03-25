@@ -15,6 +15,7 @@ import paho.mqtt.client as mqtt
 import requests
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from command_gateway import HybridCommandGateway
 from control_config import KnowledgeBaseConfig
 from control_runtime import ControlSafetyManager
 import database as db
@@ -57,6 +58,8 @@ CURRENT_CROP         = os.getenv("CROP",         "lettuce_nft")
 CURRENT_GROWTH_STAGE = os.getenv("GROWTH_STAGE", "vegetative")
 CURRENT_GROWTH_DAY   = int(os.getenv("GROWTH_DAY", "14"))
 TRAY_ID              = os.getenv("TRAY_ID",       "tray01")
+DRY_RUN              = os.getenv("DRY_RUN", "0").strip().lower() in {"1", "true", "yes", "on"}
+OPERATOR_RESET_TOPIC = f"farm/{TRAY_ID}/operator/reset"
 
 KB_CONFIG = KnowledgeBaseConfig()
 
@@ -346,7 +349,9 @@ class GrowMapCache:
         def _r(obj, key):
             v = obj.get(key, {})
             if isinstance(v, dict):
-                return v.get("range") or v.get("value") or v.get("acceptable_range")
+                return v.get("acceptable_range") or v.get("range") or (
+                    [v["value"], v["value"]] if v.get("value") is not None else None
+                )
             return v
 
         return {
@@ -541,12 +546,32 @@ class CommandGateway:
         audit_log.info("REQUEST_TYPE=%s | RAW_RESPONSE=%s", request_type, raw[:2000])
         parsed = self._parse(raw)
         if parsed is None:
+            db.save_control_event(
+                "policy_result",
+                "smart_bridge",
+                status="parse_failed",
+                details=f"request_type={request_type}",
+            )
             return False, None
 
         if parsed.situation_summary:
             log.info("Policy: %s", parsed.situation_summary[:160])
         if parsed.selected_control_strategy:
             log.info("Strategy: %s", parsed.selected_control_strategy[:160])
+        db.save_control_event(
+            "policy_result",
+            "smart_bridge",
+            status="parsed",
+            details=parsed.selected_control_strategy[:200] or parsed.situation_summary[:200],
+            context_json=json.dumps(
+                {
+                    "risks": parsed.risks[:10],
+                    "recheck_interval_sec": parsed.recheck_interval_sec,
+                    "command_count": len(parsed.commands),
+                },
+                ensure_ascii=False,
+            ),
+        )
         for risk in parsed.risks:
             log.warning("Policy risk: %s", risk)
         for condition in parsed.stop_conditions:
@@ -554,20 +579,30 @@ class CommandGateway:
 
         if not parsed.commands:
             log.info("Policy returned no commands")
+            db.save_control_event(
+                "policy_result",
+                "smart_bridge",
+                status="no_commands",
+                details=parsed.situation_summary[:200],
+            )
             return True, parsed
 
         validated = self._validate(parsed.commands, snapshot)
         if not validated:
             log.warning("All policy commands rejected")
+            db.save_control_event(
+                "command_batch",
+                "smart_bridge",
+                status="rejected",
+                details="all commands rejected by deterministic validation",
+            )
             return False, parsed
 
         published = False
         published_commands: list[dict[str, Any]] = []
         for cmd in validated:
             topic = ACTUATOR_TOPIC_MAP[cmd.actuator]
-            result = self._client.publish(topic, cmd.action)
-            ok = result.rc == mqtt.MQTT_ERR_SUCCESS
-            status = "OK" if ok else "FAIL"
+            ok, status = self._publish_action(topic, cmd.actuator, cmd.action, cmd.duration_sec, cmd.reason)
 
             if ok:
                 log.info("✅ PUBLISH  %-46s → %-8s | %s", topic, cmd.action, cmd.reason)
@@ -579,7 +614,7 @@ class CommandGateway:
                 if cmd.duration_sec and cmd.action not in ("OFF", "CLOSE"):
                     self._auto_off(cmd.actuator, cmd.duration_sec)
             else:
-                log.error("❌ PUBLISH FAILED %s rc=%d", topic, result.rc)
+                log.error("PUBLISH FAILED %s", topic)
 
             db.save_command(self._req_id, cmd.actuator, cmd.action, cmd.duration_sec, cmd.reason, topic, status)
             audit_log.info("CMD_%s | %s | %s | %s", status, cmd.actuator, cmd.action, cmd.reason)
@@ -636,19 +671,24 @@ class CommandGateway:
         for cmd in commands:
             if cmd.actuator not in ALLOWED_ACTUATORS:
                 log.warning("REJECTED not-in-allowlist: %s", cmd.actuator)
+                db.save_control_event("command_rejected", "smart_bridge", metric=cmd.actuator, status="not_allowed", details=cmd.action)
                 continue
             if cmd.action not in ALLOWED_ACTUATORS[cmd.actuator]:
                 log.warning("REJECTED bad action: %s.%s", cmd.actuator, cmd.action)
+                db.save_control_event("command_rejected", "smart_bridge", metric=cmd.actuator, status="bad_action", details=cmd.action)
                 continue
             if has_ec_dose and cmd.actuator in ("ph_down_pump", "ph_up_pump") and cmd.action == "ON":
                 log.warning("REJECTED %s.%s: pH correction must wait until after EC recheck", cmd.actuator, cmd.action)
+                db.save_control_event("command_rejected", "smart_bridge", metric=cmd.actuator, status="ph_after_ec_block", details=cmd.action)
                 continue
             if cmd.action in ("ON", "OPEN") and not self._dose_ok(cmd.actuator):
+                db.save_control_event("command_rejected", "smart_bridge", metric=cmd.actuator, status="dose_limit", details=cmd.action)
                 continue
 
             allowed, reason = self._safety.can_execute(cmd.actuator, cmd.action, snapshot)
             if not allowed:
                 log.warning("REJECTED %s.%s: %s", cmd.actuator, cmd.action, reason)
+                db.save_control_event("command_rejected", "smart_bridge", metric=cmd.actuator, status="safety_block", details=reason)
                 continue
 
             if cmd.duration_sec is not None:
@@ -666,6 +706,7 @@ class CommandGateway:
                 wl = (snapshot.get("water_level") or {}).get("last")
                 if wl is not None and wl < 25.0:
                     log.warning("REJECTED drain_valve OPEN: water_level=%.1f%%", wl)
+                    db.save_control_event("command_rejected", "smart_bridge", metric=cmd.actuator, status="low_water", details=str(wl))
                     continue
 
             conflict = False
@@ -673,6 +714,7 @@ class CommandGateway:
                 other = b if cmd.actuator == a else (a if cmd.actuator == b else None)
                 if other and applied.get(other) == "ON" and cmd.action == "ON":
                     log.warning("REJECTED conflict: %s vs %s", cmd.actuator, other)
+                    db.save_control_event("command_rejected", "smart_bridge", metric=cmd.actuator, status="conflict", details=other)
                     conflict = True
                     break
             if conflict:
@@ -682,6 +724,25 @@ class CommandGateway:
             accepted.append(cmd)
 
         return accepted
+
+    def _publish_action(
+        self,
+        topic: str,
+        actuator: str,
+        action: str,
+        duration_sec: Optional[int],
+        reason: str,
+    ) -> tuple[bool, str]:
+        if DRY_RUN:
+            log.info("[DRY_RUN] %-46s -> %-8s | %s", topic, action, reason)
+            return True, "DRY_RUN"
+
+        result = self._client.publish(topic, action)
+        if result.rc != mqtt.MQTT_ERR_SUCCESS:
+            log.error("PUBLISH FAILED %s rc=%d", topic, result.rc)
+            return False, "FAIL"
+        log.info("PUBLISH %-46s -> %-8s | %s", topic, action, reason)
+        return True, "OK"
 
     def _publish_direct(self, actuator: str, action: str, duration_sec: Optional[int], reason: str) -> bool:
         topic = ACTUATOR_TOPIC_MAP.get(actuator)
@@ -816,7 +877,20 @@ class SmartMQTTBridge:
         self._mqtt.on_connect    = self._on_connect
         self._mqtt.on_disconnect = self._on_disconnect
         self._mqtt.on_message    = self._on_message
-        self._gateway = CommandGateway(self._mqtt, self._control)
+        self._gateway = HybridCommandGateway(
+            self._mqtt,
+            self._control,
+            dry_run=DRY_RUN,
+            actuator_topics=ACTUATOR_TOPIC_MAP,
+            allowed_actions=ALLOWED_ACTUATORS,
+            max_duration=MAX_DURATION,
+            max_consecutive_doses=MAX_CONSECUTIVE_DOSES,
+            conflicting_pairs=CONFLICTING_PAIRS,
+            dose_reset_sec=DOSE_RESET_SEC,
+            recovery_protocols=KB_CONFIG.recovery_protocols,
+            check_level=_check_level,
+            thresholds=THRESHOLDS,
+        )
 
     def _on_connect(self, client, userdata, flags, reason_code, properties) -> None:
         if reason_code == 0:
@@ -824,6 +898,8 @@ class SmartMQTTBridge:
             log.info("Connected to MQTT %s:%d", MQTT_HOST, MQTT_PORT)
             client.subscribe(MQTT_TELEMETRY_TOPIC)
             client.subscribe(f"farm/{TRAY_ID}/status/#")
+            client.subscribe(OPERATOR_RESET_TOPIC)
+            log.info("Subscribed to operator reset topic %s", OPERATOR_RESET_TOPIC)
         else:
             log.error("MQTT connect failed rc=%s", reason_code)
 
@@ -861,6 +937,45 @@ class SmartMQTTBridge:
                     self._active_actuators[key] = msg.payload.decode("utf-8").strip()
                 except Exception:
                     pass
+        elif topic == OPERATOR_RESET_TOPIC:
+            self._handle_operator_reset(msg.payload)
+
+    def _handle_operator_reset(self, payload: bytes) -> None:
+        raw = payload.decode("utf-8", errors="replace").strip()
+        metric = "all"
+        operator = "operator"
+        try:
+            data = json.loads(raw) if raw.startswith("{") else {"metric": raw}
+        except json.JSONDecodeError:
+            data = {"metric": raw}
+
+        if isinstance(data, dict):
+            metric = str(data.get("metric", "all")).strip().lower() or "all"
+            operator = str(data.get("operator", "operator")).strip() or "operator"
+
+        if metric == "all":
+            reset_metrics = self._control.reset_all(operator=operator)
+            self._last_control_version = -1
+            log.warning("Operator reset received: metric=all operator=%s reset=%s", operator, reset_metrics or "none")
+            db.save_control_event(
+                "operator_reset",
+                "smart_bridge",
+                metric="all",
+                status="applied" if reset_metrics else "noop",
+                details=f"operator={operator}",
+            )
+            return
+
+        changed = self._control.reset_metric(metric, operator=operator)
+        self._last_control_version = -1
+        log.warning("Operator reset received: metric=%s operator=%s changed=%s", metric, operator, changed)
+        db.save_control_event(
+            "operator_reset",
+            "smart_bridge",
+            metric=metric,
+            status="applied" if changed else "noop",
+            details=f"operator={operator}",
+        )
 
     def _eval_alerts(self) -> None:
         if not self._alert_engine.should_evaluate():
@@ -878,6 +993,31 @@ class SmartMQTTBridge:
     def _current_stage_targets(self) -> dict[str, Any]:
         return self._grow_map.get_stage_compact(CURRENT_CROP, CURRENT_GROWTH_STAGE)
 
+    def _log_control_decision(
+        self,
+        status: str,
+        reason: str,
+        control_state: dict[str, Any],
+    ) -> None:
+        details = (
+            f"{reason} | actionable={control_state.get('actionable_metrics', [])} "
+            f"blocked={control_state.get('blocked_metrics', {})}"
+        )
+        log.info("Control decision: %s | %s", status, details)
+        db.save_control_event(
+            "llm_decision",
+            "smart_bridge",
+            status=status,
+            details=details[:500],
+            context_json=json.dumps(
+                {
+                    "risks": control_state.get("risks", []),
+                    "deviations": control_state.get("deviations", []),
+                },
+                ensure_ascii=False,
+            ),
+        )
+
     def _maybe_control(self) -> None:
         snapshot = self._aggregator.snapshot()
         stage_targets = self._current_stage_targets()
@@ -889,15 +1029,25 @@ class SmartMQTTBridge:
         if telemetry_changed:
             self._last_control_version = self._telemetry_version
             if control_state["actionable_metrics"]:
-                self._fire_llm(
+                reason = "fresh telemetry with actionable pH/EC deviation"
+                if not self._fire_llm(
                     "CONTROL",
                     {
                         "snapshot": snapshot,
                         "stage_targets": stage_targets,
                         "control_state": control_state,
                     },
-                )
+                ):
+                    self._log_control_decision("busy", reason, control_state)
+                else:
+                    self._log_control_decision("called", reason, control_state)
                 return
+            if control_state["deviations"]:
+                self._log_control_decision("skipped", "fresh telemetry but all deviations blocked by deterministic safety", control_state)
+            else:
+                self._log_control_decision("skipped", "fresh telemetry but pH/EC already inside target", control_state)
+        elif control_state["actionable_metrics"] and self._control.heartbeat_due():
+            self._log_control_decision("waiting", "actionable deviation present but no new telemetry since last decision", control_state)
 
         if self._control.heartbeat_due():
             self._log_heartbeat(control_state, snapshot)
@@ -922,15 +1072,16 @@ class SmartMQTTBridge:
             json.dumps(risks, ensure_ascii=False),
         )
 
-    def _fire_llm(self, request_type: str, context: Optional[dict]) -> None:
+    def _fire_llm(self, request_type: str, context: Optional[dict]) -> bool:
         if not self._llm_busy.acquire(blocking=False):
-            return
+            return False
         threading.Thread(
             target=self._llm_pipeline,
             args=(request_type, context),
             daemon=True,
             name=f"LLM-{request_type}",
         ).start()
+        return True
 
     def _llm_pipeline(self, request_type: str, context: Optional[dict]) -> None:
         try:
@@ -965,13 +1116,31 @@ class SmartMQTTBridge:
             )
 
             if raw is None:
+                db.save_control_event(
+                    "llm_result",
+                    "smart_bridge",
+                    status="unavailable",
+                    details=f"failures={self._llm.consecutive_failures}",
+                )
                 if self._llm.consecutive_failures >= DEAD_MAN_THRESHOLD:
                     log.critical("Dead man's switch triggered — fallback rules")
                     self._gateway.set_req_id(req_id)
+                    db.save_control_event(
+                        "fallback",
+                        "smart_bridge",
+                        status="triggered",
+                        details=f"dead_man_threshold={DEAD_MAN_THRESHOLD}",
+                    )
                     self._gateway.fallback(snapshot, stage_targets)
                 return
 
             self._gateway.set_req_id(req_id)
+            db.save_control_event(
+                "llm_result",
+                "smart_bridge",
+                status="received",
+                details=f"chars={len(raw)}",
+            )
             self._gateway.process(raw, snapshot, request_type)
 
         except Exception as exc:
@@ -988,6 +1157,8 @@ class SmartMQTTBridge:
                  CURRENT_CROP, CURRENT_GROWTH_STAGE, CURRENT_GROWTH_DAY, TRAY_ID)
         log.info("OpenClaw: %s  Ollama fallback: %s", OPENCLAW_URL, OLLAMA_URL)
         log.info("InfluxDB: %s  bucket=%s", influx.INFLUX_URL, influx.INFLUX_BUCKET)
+        log.info("Dry-run mode: %s", DRY_RUN)
+        log.info("Operator reset topic: %s", OPERATOR_RESET_TOPIC)
 
         try:
             self._mqtt.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
