@@ -20,8 +20,10 @@ from control_runtime import ControlSafetyManager
 import database as db
 import influx_writer as influx
 
+PROFILE = load_runtime_profile()
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, PROFILE.log_level, logging.INFO),
     format="%(asctime)s [%(levelname)-8s] %(name)s — %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
@@ -51,7 +53,6 @@ CURRENT_GROWTH_STAGE = os.getenv("GROWTH_STAGE", "vegetative")
 CURRENT_GROWTH_DAY   = int(os.getenv("GROWTH_DAY", "14"))
 TRAY_ID              = os.getenv("TRAY_ID",       "tray01")
 DRY_RUN              = os.getenv("DRY_RUN", "0").strip().lower() in {"1", "true", "yes", "on"}
-PROFILE              = load_runtime_profile()
 MQTT_HOST            = PROFILE.mqtt_host
 MQTT_PORT            = PROFILE.mqtt_port
 MQTT_TELEMETRY_TOPIC = f"farm/{TRAY_ID}/telemetry/#"
@@ -834,6 +835,8 @@ class SmartMQTTBridge:
     def run(self) -> None:
         log.info("=== Neuroagronom Smart Bridge v3 ===")
         log.info("profile=%s", PROFILE.name)
+        log.info("logging=%s", PROFILE.log_level)
+        log.info("mqtt=%s:%d", MQTT_HOST, MQTT_PORT)
         log.info("crop=%s  stage=%s  day=%d  tray=%s",
                  CURRENT_CROP, CURRENT_GROWTH_STAGE, CURRENT_GROWTH_DAY, TRAY_ID)
         log.info("OpenClaw: %s  Ollama fallback: %s", OPENCLAW_URL, OLLAMA_URL)

@@ -1,0 +1,65 @@
+{
+  "test": {
+    "mqtt": {
+      "host": "localhost",
+      "port": 1883,
+      "reconnect_max": 10
+    },
+    "logging": {
+      "level": "DEBUG"
+    },
+    "llm": {
+      "timeout_sec": 30,
+      "dead_man_threshold": 2
+    },
+    "telemetry": {
+      "bootstrap_grace_sec": 20,
+      "llm_min_fresh": {
+        "ph": ["ph"],
+        "ec": ["ec"]
+      },
+      "actuation_min_fresh": {
+        "ph": ["ph", "water_level"],
+        "ec": ["ec", "water_level"]
+      }
+    },
+    "safety_overrides": {
+      "heartbeat_sec": 15,
+      "sensor_silence_sec": 45,
+      "effect_tracking": {
+        "ph": {
+          "default_recheck_sec": 60
+        },
+        "ec": {
+          "default_recheck_sec": 90
+        }
+      }
+    }
+  },
+  "prod": {
+    "mqtt": {
+      "host": "mqtt.production.internal",
+      "port": 1883,
+      "reconnect_max": 30
+    },
+    "logging": {
+      "level": "INFO"
+    },
+    "llm": {
+      "timeout_sec": 90,
+      "dead_man_threshold": 3
+    },
+    "telemetry": {
+      "bootstrap_grace_sec": 180,
+      "llm_min_fresh": {
+        "ph": ["ph"],
+        "ec": ["ec"]
+      },
+      "actuation_min_fresh": {
+        "ph": ["ph", "water_level"],
+        "ec": ["ec", "water_level"]
+      }
+    },
+    "safety_overrides": {}
+  }
+}

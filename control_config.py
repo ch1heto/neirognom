@@ -11,14 +11,18 @@ from typing import Any
 log = logging.getLogger("control_config")
 
 KB_ROOT = Path("knowledge_base")
+RUNTIME_PROFILES_PATH = Path("runtime_profiles.json")
 
 
-PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
+BUILTIN_PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
     "test": {
         "mqtt": {
             "host": "localhost",
             "port": 1883,
             "reconnect_max": 10,
+        },
+        "logging": {
+            "level": "DEBUG",
         },
         "llm": {
             "timeout_sec": 30,
@@ -46,9 +50,12 @@ PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "prod": {
         "mqtt": {
-            "host": "localhost",
+            "host": "mqtt.production.internal",
             "port": 1883,
             "reconnect_max": 30,
+        },
+        "logging": {
+            "level": "INFO",
         },
         "llm": {
             "timeout_sec": 90,
@@ -98,6 +105,10 @@ class RuntimeProfile:
         return int(self.settings.get("mqtt", {}).get("reconnect_max", 30))
 
     @property
+    def log_level(self) -> str:
+        return str(self.settings.get("logging", {}).get("level", "INFO")).upper()
+
+    @property
     def llm_timeout_sec(self) -> int:
         return int(self.settings.get("llm", {}).get("timeout_sec", 90))
 
@@ -120,16 +131,40 @@ class RuntimeProfile:
         return list(self.settings.get("telemetry", {}).get("actuation_min_fresh", {}).get(metric, [metric]))
 
 
+def load_profile_definitions(path: Path = RUNTIME_PROFILES_PATH) -> dict[str, dict[str, Any]]:
+    profiles = copy.deepcopy(BUILTIN_PROFILE_DEFAULTS)
+    if not path.exists():
+        return profiles
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        log.error("Runtime profiles JSON parse error in %s: %s", path, exc)
+        return profiles
+
+    if not isinstance(loaded, dict):
+        log.error("Runtime profiles file must contain a JSON object: %s", path)
+        return profiles
+
+    for name, profile in loaded.items():
+        if not isinstance(profile, dict):
+            continue
+        base = profiles.get(name, {})
+        profiles[name] = _deep_merge(base, profile)
+    return profiles
+
+
 def load_runtime_profile() -> RuntimeProfile:
+    profile_definitions = load_profile_definitions()
     name = os.getenv("APP_PROFILE", "test").strip().lower() or "test"
-    if name not in PROFILE_DEFAULTS:
+    if name not in profile_definitions:
         log.warning("Unknown APP_PROFILE '%s' - falling back to 'test'", name)
         name = "test"
 
-    settings = copy.deepcopy(PROFILE_DEFAULTS[name])
+    settings = copy.deepcopy(profile_definitions[name])
     settings["mqtt"]["host"] = os.getenv("MQTT_HOST", settings["mqtt"]["host"])
     settings["mqtt"]["port"] = int(os.getenv("MQTT_PORT", str(settings["mqtt"]["port"])))
     settings["mqtt"]["reconnect_max"] = int(os.getenv("MQTT_RECONNECT_MAX", str(settings["mqtt"]["reconnect_max"])))
+    settings["logging"]["level"] = os.getenv("LOG_LEVEL", settings["logging"]["level"]).upper()
     settings["llm"]["timeout_sec"] = int(os.getenv("LLM_TIMEOUT_SEC", str(settings["llm"]["timeout_sec"])))
     settings["llm"]["dead_man_threshold"] = int(os.getenv("DEAD_MAN_THRESHOLD", str(settings["llm"]["dead_man_threshold"])))
     settings["telemetry"]["bootstrap_grace_sec"] = int(
