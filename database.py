@@ -201,6 +201,88 @@ def get_recent_control_events(limit: int = 50) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def get_current_escalation_state(metrics: Optional[list[str]] = None) -> dict[str, dict]:
+    tracked_metrics = [str(metric).strip().lower() for metric in (metrics or ["ph", "ec"])]
+    state = {
+        metric: {
+            "metric": metric,
+            "active": False,
+            "state": "clear",
+            "since": None,
+            "reason": "",
+            "last_reset_ts": None,
+            "last_event_ts": None,
+        }
+        for metric in tracked_metrics
+    }
+
+    placeholders = ",".join("?" for _ in tracked_metrics)
+    params = [*tracked_metrics, "all"]
+    query = (
+        "SELECT ts,event_type,metric,status,details"
+        " FROM control_events"
+        " WHERE source='control_runtime'"
+        " AND event_type IN ('escalation','operator_reset')"
+        f" AND metric IN ({placeholders}, ?)"
+        " ORDER BY id ASC"
+    )
+
+    with _lock:
+        conn = get_conn()
+        rows = conn.execute(query, params).fetchall()
+        conn.close()
+
+    for row in rows:
+        ts = row["ts"]
+        event_type = (row["event_type"] or "").strip().lower()
+        metric = (row["metric"] or "").strip().lower()
+        status = (row["status"] or "").strip().lower()
+        details = row["details"] or ""
+
+        if event_type == "escalation" and metric in state and status == "operator_required":
+            state[metric].update(
+                {
+                    "active": True,
+                    "state": "operator_required",
+                    "since": ts,
+                    "reason": details,
+                    "last_event_ts": ts,
+                }
+            )
+            continue
+
+        if event_type != "operator_reset" or status != "applied":
+            continue
+
+        if metric == "all":
+            for item in state.values():
+                item.update(
+                    {
+                        "active": False,
+                        "state": "clear",
+                        "since": None,
+                        "reason": "",
+                        "last_reset_ts": ts,
+                        "last_event_ts": ts,
+                    }
+                )
+            continue
+
+        if metric in state:
+            state[metric].update(
+                {
+                    "active": False,
+                    "state": "clear",
+                    "since": None,
+                    "reason": "",
+                    "last_reset_ts": ts,
+                    "last_event_ts": ts,
+                }
+            )
+
+    return state
+
+
 def update_actuator_state(actuator: str, state: str) -> None:
     with _lock:
         conn = get_conn()
