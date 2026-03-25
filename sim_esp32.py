@@ -1,28 +1,30 @@
 import json
+import os
 import random
 import time
 
 import paho.mqtt.client as mqtt
 
-MQTT_BROKER_HOST = "localhost"
-MQTT_BROKER_PORT = 1883
-PUBLISH_INTERVAL_SEC = 7
+MQTT_BROKER_HOST = os.getenv("MQTT_BROKER_HOST", "localhost")
+MQTT_BROKER_PORT = int(os.getenv("MQTT_BROKER_PORT", "1883"))
+PUBLISH_INTERVAL_SEC = int(os.getenv("PUBLISH_INTERVAL_SEC", "7"))
+TRAY_ID = os.getenv("TRAY_ID", "tray01")
 
 SENSORS = {
-    "farm/tray01/telemetry/temp":        (20.0, 28.0),
-    "farm/tray01/telemetry/humidity":    (40.0, 70.0),
-    "farm/tray01/telemetry/soil":        (30.0, 60.0),
-    "farm/tray01/telemetry/water_level": (50.0, 100.0),
-    "farm/tray01/telemetry/ph":          (5.5,  6.5),
-    "farm/tray01/telemetry/ec":          (1.0,  2.5),
+    f"farm/{TRAY_ID}/telemetry/temp":        (20.0, 28.0),
+    f"farm/{TRAY_ID}/telemetry/humidity":    (40.0, 70.0),
+    f"farm/{TRAY_ID}/telemetry/soil":        (30.0, 60.0),
+    f"farm/{TRAY_ID}/telemetry/water_level": (50.0, 100.0),
+    f"farm/{TRAY_ID}/telemetry/ph":          (5.5,  6.5),
+    f"farm/{TRAY_ID}/telemetry/ec":          (1.0,  2.5),
 }
 
 
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print(f"[CONNECTED] MQTT broker {MQTT_BROKER_HOST}:{MQTT_BROKER_PORT}")
-        client.subscribe("farm/tray01/cmd/#")
-        print("[SUBSCRIBED] farm/tray01/cmd/#")
+        client.subscribe(f"farm/{TRAY_ID}/cmd/#")
+        print(f"[SUBSCRIBED] farm/{TRAY_ID}/cmd/#")
     else:
         print(f"[ERROR] Connection failed, rc={rc}")
 
@@ -39,7 +41,7 @@ client.on_message = on_message
 client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, keepalive=60)
 client.loop_start()
 
-print("[SIM] ESP32 simulator started. Publishing every 7 seconds...")
+print(f"[SIM] ESP32 simulator started for tray='{TRAY_ID}'. Publishing every {PUBLISH_INTERVAL_SEC} seconds...")
 
 try:
     while True:

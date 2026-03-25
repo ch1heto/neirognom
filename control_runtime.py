@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
-from control_config import KnowledgeBaseConfig
+from control_config import KnowledgeBaseConfig, RuntimeProfile
 import database as db
 
 log = logging.getLogger("control_runtime")
@@ -46,9 +46,10 @@ class PendingEffect:
 class ControlSafetyManager:
     CONTROL_METRICS = ("ph", "ec")
 
-    def __init__(self, config: KnowledgeBaseConfig) -> None:
+    def __init__(self, config: KnowledgeBaseConfig, profile: RuntimeProfile) -> None:
         self._config = config
-        self._rules = config.safety_rules
+        self._profile = profile
+        self._rules = config.safety_rules_for_profile(profile)
         self._effect_rules = self._rules.get("effect_tracking", {})
         self._pending: dict[str, PendingEffect] = {}
         self._recent_actions: deque[dict[str, Any]] = deque(maxlen=20)
@@ -59,6 +60,7 @@ class ControlSafetyManager:
         self._last_jump_ts: dict[str, float] = {}
         self._last_effect_results: dict[str, dict[str, Any]] = {}
         self._last_heartbeat_ts = 0.0
+        self._telemetry_state: dict[str, dict[str, Any]] = {}
 
     @property
     def sensor_silence_sec(self) -> int:
@@ -78,9 +80,23 @@ class ControlSafetyManager:
     def mark_heartbeat(self) -> None:
         self._last_heartbeat_ts = time.time()
 
-    def refresh(self, snapshot: dict[str, Any]) -> None:
+    def refresh(self, snapshot: dict[str, Any], telemetry_state: dict[str, Any] | None = None) -> None:
+        self._telemetry_state = dict((telemetry_state or {}).get("sensors", {}))
         self._refresh_jump_anomalies(snapshot)
         self._refresh_pending_effects(snapshot)
+
+    def _sensor_state(self, snapshot: dict[str, Any], sensor: str) -> str:
+        state = self._telemetry_state.get(sensor, {}).get("state")
+        if state:
+            return str(state)
+
+        ts = (snapshot.get(sensor) or {}).get("last_ts")
+        if ts is None:
+            return "stale_missing"
+        return "stale_missing" if (time.time() - float(ts)) > self.sensor_silence_sec else "fresh"
+
+    def _sensor_fresh(self, snapshot: dict[str, Any], sensor: str) -> bool:
+        return self._sensor_state(snapshot, sensor) == "fresh"
 
     def _refresh_jump_anomalies(self, snapshot: dict[str, Any]) -> None:
         self._current_jump_issues = {}
@@ -217,12 +233,6 @@ class ControlSafetyManager:
             details=reason,
         )
 
-    def _is_silent(self, snapshot: dict[str, Any], sensor: str) -> bool:
-        ts = (snapshot.get(sensor) or {}).get("last_ts")
-        if ts is None:
-            return True
-        return (time.time() - float(ts)) > self.sensor_silence_sec
-
     def _level(self, metric: str, value: float) -> str:
         levels = self._config.threshold_levels.get(metric, {})
         critical = levels.get("critical", (float("-inf"), float("inf")))
@@ -233,23 +243,33 @@ class ControlSafetyManager:
             return "WARNING"
         return "OK"
 
-    def assess(self, snapshot: dict[str, Any], stage_targets: dict[str, Any]) -> dict[str, Any]:
-        self.refresh(snapshot)
+    def assess(
+        self,
+        snapshot: dict[str, Any],
+        stage_targets: dict[str, Any],
+        telemetry_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.refresh(snapshot, telemetry_state)
 
         deviations = []
+        reasoning_metrics = []
         actionable_metrics = []
         blocked_metrics: dict[str, list[str]] = {}
         risks: list[str] = []
 
         water_level = (snapshot.get("water_level") or {}).get("last")
-        water_level_silent = self._is_silent(snapshot, "water_level")
+        water_level_state = self._sensor_state(snapshot, "water_level")
+        water_level_fresh = water_level_state == "fresh"
         low_water = water_level is not None and float(water_level) < self.low_water_limit_pct
         if low_water:
             risks.append(f"low_water_level_for_correction:{round(float(water_level), 2)}")
 
         for sensor in ("ph", "ec", "water_level"):
-            if self._is_silent(snapshot, sensor):
-                risks.append(f"sensor_silent:{sensor}")
+            sensor_state = self._sensor_state(snapshot, sensor)
+            if sensor_state == "stale_missing":
+                risks.append(f"sensor_stale:{sensor}")
+            elif sensor_state == "expected_not_seen_yet":
+                risks.append(f"sensor_expected_not_seen:{sensor}")
 
         for sensor, issue in self._current_jump_issues.items():
             risks.append(f"implausible_jump:{issue}")
@@ -276,9 +296,11 @@ class ControlSafetyManager:
             if direction is None:
                 continue
 
+            metric_state = self._sensor_state(snapshot, metric)
+            reasoning_allowed = metric_state == "fresh"
             reasons = []
-            if self._is_silent(snapshot, metric):
-                reasons.append("sensor_silent")
+            if metric_state != "fresh":
+                reasons.append(f"telemetry_{metric_state}")
             if metric in self._current_jump_issues:
                 reasons.append("implausible_jump")
             if metric in self._pending:
@@ -287,7 +309,7 @@ class ControlSafetyManager:
                 reasons.append("operator_required")
             if low_water:
                 reasons.append("low_water")
-            if water_level_silent:
+            if not water_level_fresh:
                 reasons.append("water_level_unknown")
             if metric == "ec" and direction == "decrease":
                 ec_high = self._config.recovery_protocols.get("ec_high", {})
@@ -300,17 +322,22 @@ class ControlSafetyManager:
                 "target_range": [low, high],
                 "direction": direction,
                 "severity": self._level(metric, float(last)),
+                "reasoning_allowed": reasoning_allowed,
+                "telemetry_state": metric_state,
                 "blocked": bool(reasons),
                 "blocked_reasons": reasons,
             }
             deviations.append(deviation)
+            if reasoning_allowed:
+                reasoning_metrics.append(metric)
             if reasons:
                 blocked_metrics[metric] = reasons
-            else:
+            if reasoning_allowed and not reasons:
                 actionable_metrics.append(metric)
 
         return {
             "deviations": deviations,
+            "reasoning_metrics": reasoning_metrics,
             "actionable_metrics": actionable_metrics,
             "blocked_metrics": blocked_metrics,
             "pending_effects": [pending.to_dict() for pending in self._pending.values()],
@@ -319,6 +346,7 @@ class ControlSafetyManager:
             "last_effect_results": list(self._last_effect_results.values())[-5:],
             "risks": risks,
             "low_water": low_water,
+            "telemetry_state": telemetry_state or {"sensors": {}},
         }
 
     def recovery_hints(self, metrics: list[str]) -> dict[str, Any]:
@@ -353,13 +381,15 @@ class ControlSafetyManager:
             return True, ""
 
         metric, _ = effect
+        if not self._sensor_fresh(snapshot, metric):
+            return False, f"metric_telemetry_unavailable:{metric}"
         if metric in self._escalations:
             return False, f"operator_escalation_active:{metric}"
         if metric in self._pending:
             return False, f"pending_effect_recheck:{metric}"
         if metric in self._current_jump_issues:
             return False, f"implausible_jump:{metric}"
-        if self._is_silent(snapshot, "water_level"):
+        if not self._sensor_fresh(snapshot, "water_level"):
             return False, "water_level_unknown"
 
         water_level = (snapshot.get("water_level") or {}).get("last")

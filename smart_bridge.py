@@ -15,7 +15,7 @@ import paho.mqtt.client as mqtt
 import requests
 
 from command_gateway import HybridCommandGateway
-from control_config import KnowledgeBaseConfig
+from control_config import KnowledgeBaseConfig, load_runtime_profile
 from control_runtime import ControlSafetyManager
 import database as db
 import influx_writer as influx
@@ -25,23 +25,17 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)-8s] %(name)s — %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-log       = logging.getLogger("smart_bridge")
+log = logging.getLogger("smart_bridge")
 audit_log = logging.getLogger("audit")
 _ah = logging.FileHandler("audit.log", encoding="utf-8")
 _ah.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
 audit_log.addHandler(_ah)
 audit_log.setLevel(logging.DEBUG)
 
-MQTT_HOST            = "localhost"
-MQTT_PORT            = 1883
-MQTT_TELEMETRY_TOPIC = "farm/tray01/telemetry/#"
-MQTT_RECONNECT_MAX   = 30
-
 OPENCLAW_URL         = os.getenv("OPENCLAW_URL",   "http://localhost:8080/v1/chat/completions")
 OPENCLAW_MODEL       = os.getenv("OPENCLAW_MODEL", "llama3.1")
 OLLAMA_URL           = os.getenv("OLLAMA_URL",     "http://localhost:11434/api/generate")
 OLLAMA_MODEL         = os.getenv("OLLAMA_MODEL",   "llama3.1")
-LLM_TIMEOUT_SEC      = 90
 
 SYSTEM_PROMPT_CORE   = "system_prompt_core.txt"
 SYSTEM_PROMPT_SCHEMA = "system_prompt_schema.txt"
@@ -49,7 +43,6 @@ KNOWLEDGE_BASE_DIR   = Path("knowledge_base/grow_maps")
 
 WINDOW_SIZE          = 60
 TREND_WINDOW         = 5
-DEAD_MAN_THRESHOLD   = 3
 ALERT_COOLDOWN_SEC   = 15 * 60
 INFLUX_WRITE_SEC     = 60
 
@@ -58,6 +51,14 @@ CURRENT_GROWTH_STAGE = os.getenv("GROWTH_STAGE", "vegetative")
 CURRENT_GROWTH_DAY   = int(os.getenv("GROWTH_DAY", "14"))
 TRAY_ID              = os.getenv("TRAY_ID",       "tray01")
 DRY_RUN              = os.getenv("DRY_RUN", "0").strip().lower() in {"1", "true", "yes", "on"}
+PROFILE              = load_runtime_profile()
+MQTT_HOST            = PROFILE.mqtt_host
+MQTT_PORT            = PROFILE.mqtt_port
+MQTT_TELEMETRY_TOPIC = f"farm/{TRAY_ID}/telemetry/#"
+MQTT_STATUS_TOPIC    = f"farm/{TRAY_ID}/status/#"
+MQTT_RECONNECT_MAX   = PROFILE.mqtt_reconnect_max
+LLM_TIMEOUT_SEC      = PROFILE.llm_timeout_sec
+DEAD_MAN_THRESHOLD   = PROFILE.dead_man_threshold
 OPERATOR_RESET_TOPIC = f"farm/{TRAY_ID}/operator/reset"
 
 KB_CONFIG = KnowledgeBaseConfig()
@@ -67,7 +68,7 @@ ALLOWED_ACTUATORS: dict[str, list[str]] = KB_CONFIG.allowed_actions
 ACTUATOR_TOPIC_MAP: dict[str, str] = KB_CONFIG.actuator_topics
 MAX_DURATION: dict[str, int] = KB_CONFIG.max_duration_sec
 MAX_CONSECUTIVE_DOSES: dict[str, int] = KB_CONFIG.max_consecutive_doses
-SAFETY_RULES: dict[str, Any] = KB_CONFIG.safety_rules
+SAFETY_RULES: dict[str, Any] = KB_CONFIG.safety_rules_for_profile(PROFILE)
 SENSOR_SILENT_SEC = int(SAFETY_RULES.get("sensor_silence_sec", 300))
 MULTI_WARNING_THRESHOLD = KB_CONFIG.multi_parameter_stress_count
 
@@ -368,12 +369,14 @@ class PromptBuilder:
         context = {
             "request_type": "CONTROL_POLICY",
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "runtime_profile": PROFILE.name,
             "tray_id": tray_id,
             "crop": crop,
             "stage": stage,
             "growth_day": day,
             "control_scope": ["ph", "ec"],
             "telemetry": self._telemetry(snapshot),
+            "telemetry_state": control_state.get("telemetry_state", {}),
             "stage_targets": {
                 "ph_range": stage_targets.get("ph_range"),
                 "ec_range": stage_targets.get("ec_range"),
@@ -382,6 +385,8 @@ class PromptBuilder:
             "risk_state": {
                 "risks": control_state.get("risks", []),
                 "blocked_metrics": control_state.get("blocked_metrics", {}),
+                "reasoning_metrics": control_state.get("reasoning_metrics", []),
+                "actionable_metrics": control_state.get("actionable_metrics", []),
                 "escalations": control_state.get("escalations", []),
                 "pending_effects": control_state.get("pending_effects", []),
                 "last_effect_results": control_state.get("last_effect_results", []),
@@ -471,7 +476,7 @@ class SmartMQTTBridge:
         self._aggregator     = Aggregator()
         self._alert_engine   = AlertEngine(self._aggregator)
         self._grow_map       = GrowMapCache()
-        self._control        = ControlSafetyManager(KB_CONFIG)
+        self._control        = ControlSafetyManager(KB_CONFIG, PROFILE)
         self._prompt_builder = PromptBuilder(self._grow_map, KB_CONFIG)
         self._llm            = LLMClient()
         self._llm_busy       = threading.Lock()
@@ -479,6 +484,7 @@ class SmartMQTTBridge:
         self._reconnect_delay = 1
         self._telemetry_version = 0
         self._last_control_version = -1
+        self._telemetry_expected_since = time.time()
 
         saved_states = db.get_actuator_states()
         self._active_actuators: dict[str, str] = {
@@ -513,9 +519,10 @@ class SmartMQTTBridge:
     def _on_connect(self, client, userdata, flags, reason_code, properties) -> None:
         if reason_code == 0:
             self._reconnect_delay = 1
+            self._telemetry_expected_since = time.time()
             log.info("Connected to MQTT %s:%d", MQTT_HOST, MQTT_PORT)
             client.subscribe(MQTT_TELEMETRY_TOPIC)
-            client.subscribe(f"farm/{TRAY_ID}/status/#")
+            client.subscribe(MQTT_STATUS_TOPIC)
             client.subscribe(OPERATOR_RESET_TOPIC)
             log.info("Subscribed to operator reset topic %s", OPERATOR_RESET_TOPIC)
         else:
@@ -611,6 +618,51 @@ class SmartMQTTBridge:
     def _current_stage_targets(self) -> dict[str, Any]:
         return self._grow_map.get_stage_compact(CURRENT_CROP, CURRENT_GROWTH_STAGE)
 
+    def _telemetry_state(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        now = time.time()
+        bootstrap_active = (now - self._telemetry_expected_since) < PROFILE.telemetry_bootstrap_grace_sec
+        sensors: dict[str, dict[str, Any]] = {}
+
+        for sensor in self._aggregator.SENSORS:
+            data = snapshot.get(sensor) or {}
+            last_ts = data.get("last_ts")
+            age_sec: float | None = None
+            if last_ts is None:
+                state = "not_expected_yet" if bootstrap_active else "expected_not_seen_yet"
+            else:
+                age_sec = max(0.0, now - float(last_ts))
+                state = "stale_missing" if age_sec > self._control.sensor_silence_sec else "fresh"
+
+            sensors[sensor] = {
+                "state": state,
+                "age_sec": round(age_sec, 1) if age_sec is not None else None,
+                "has_value": data.get("last") is not None,
+            }
+
+        control_inputs = {}
+        for metric in self._control.CONTROL_METRICS:
+            llm_required = PROFILE.llm_min_fresh(metric)
+            actuation_required = PROFILE.actuation_min_fresh(metric)
+            missing_for_llm = [sensor for sensor in llm_required if sensors.get(sensor, {}).get("state") != "fresh"]
+            missing_for_actuation = [
+                sensor for sensor in actuation_required if sensors.get(sensor, {}).get("state") != "fresh"
+            ]
+            control_inputs[metric] = {
+                "llm_required_sensors": llm_required,
+                "auto_actuation_required_sensors": actuation_required,
+                "llm_ready": not missing_for_llm,
+                "auto_actuation_ready": not missing_for_actuation,
+                "missing_for_llm": missing_for_llm,
+                "missing_for_actuation": missing_for_actuation,
+            }
+
+        return {
+            "bootstrap_active": bootstrap_active,
+            "bootstrap_grace_sec": PROFILE.telemetry_bootstrap_grace_sec,
+            "sensors": sensors,
+            "control_inputs": control_inputs,
+        }
+
     def _log_control_decision(
         self,
         status: str,
@@ -618,7 +670,8 @@ class SmartMQTTBridge:
         control_state: dict[str, Any],
     ) -> None:
         details = (
-            f"{reason} | actionable={control_state.get('actionable_metrics', [])} "
+            f"{reason} | reasoning={control_state.get('reasoning_metrics', [])} "
+            f"actionable={control_state.get('actionable_metrics', [])} "
             f"blocked={control_state.get('blocked_metrics', {})}"
         )
         log.info("Control decision: %s | %s", status, details)
@@ -631,6 +684,7 @@ class SmartMQTTBridge:
                 {
                     "risks": control_state.get("risks", []),
                     "deviations": control_state.get("deviations", []),
+                    "telemetry_state": control_state.get("telemetry_state", {}),
                 },
                 ensure_ascii=False,
             ),
@@ -639,15 +693,18 @@ class SmartMQTTBridge:
     def _maybe_control(self) -> None:
         snapshot = self._aggregator.snapshot()
         stage_targets = self._current_stage_targets()
-        control_state = self._control.assess(snapshot, stage_targets)
+        telemetry_state = self._telemetry_state(snapshot)
+        control_state = self._control.assess(snapshot, stage_targets, telemetry_state)
         deviation_metrics = [item["metric"] for item in control_state.get("deviations", [])]
         control_state["recovery_hints"] = self._control.recovery_hints(deviation_metrics)
 
         telemetry_changed = self._telemetry_version != self._last_control_version
         if telemetry_changed:
             self._last_control_version = self._telemetry_version
-            if control_state["actionable_metrics"]:
-                reason = "fresh telemetry with actionable pH/EC deviation"
+            if control_state["reasoning_metrics"]:
+                reason = "fresh telemetry with sufficient pH/EC inputs for policy reasoning"
+                if not control_state["actionable_metrics"]:
+                    reason += " but auto-actuation remains gated"
                 if not self._fire_llm(
                     "CONTROL",
                     {
@@ -661,11 +718,15 @@ class SmartMQTTBridge:
                     self._log_control_decision("called", reason, control_state)
                 return
             if control_state["deviations"]:
-                self._log_control_decision("skipped", "fresh telemetry but all deviations blocked by deterministic safety", control_state)
+                self._log_control_decision(
+                    "skipped",
+                    "fresh telemetry but deviations lack minimum reasoning inputs or are blocked by deterministic safety",
+                    control_state,
+                )
             else:
                 self._log_control_decision("skipped", "fresh telemetry but pH/EC already inside target", control_state)
-        elif control_state["actionable_metrics"] and self._control.heartbeat_due():
-            self._log_control_decision("waiting", "actionable deviation present but no new telemetry since last decision", control_state)
+        elif control_state["reasoning_metrics"] and self._control.heartbeat_due():
+            self._log_control_decision("waiting", "reasoning-capable deviation present but no new telemetry since last decision", control_state)
 
         if self._control.heartbeat_due():
             self._log_heartbeat(control_state, snapshot)
@@ -685,9 +746,10 @@ class SmartMQTTBridge:
             return
 
         log.info(
-            "Heartbeat: no automatic policy call | deviations=%s risks=%s",
+            "Heartbeat: no automatic policy call | deviations=%s risks=%s telemetry=%s",
             json.dumps(deviations, ensure_ascii=False),
             json.dumps(risks, ensure_ascii=False),
+            json.dumps(control_state.get("telemetry_state", {}), ensure_ascii=False),
         )
 
     def _fire_llm(self, request_type: str, context: Optional[dict]) -> bool:
@@ -771,6 +833,7 @@ class SmartMQTTBridge:
 
     def run(self) -> None:
         log.info("=== Neuroagronom Smart Bridge v3 ===")
+        log.info("profile=%s", PROFILE.name)
         log.info("crop=%s  stage=%s  day=%d  tray=%s",
                  CURRENT_CROP, CURRENT_GROWTH_STAGE, CURRENT_GROWTH_DAY, TRAY_ID)
         log.info("OpenClaw: %s  Ollama fallback: %s", OPENCLAW_URL, OLLAMA_URL)

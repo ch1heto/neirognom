@@ -1,13 +1,141 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("control_config")
 
 KB_ROOT = Path("knowledge_base")
+
+
+PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
+    "test": {
+        "mqtt": {
+            "host": "localhost",
+            "port": 1883,
+            "reconnect_max": 10,
+        },
+        "llm": {
+            "timeout_sec": 30,
+            "dead_man_threshold": 2,
+        },
+        "telemetry": {
+            "bootstrap_grace_sec": 20,
+            "llm_min_fresh": {
+                "ph": ["ph"],
+                "ec": ["ec"],
+            },
+            "actuation_min_fresh": {
+                "ph": ["ph", "water_level"],
+                "ec": ["ec", "water_level"],
+            },
+        },
+        "safety_overrides": {
+            "heartbeat_sec": 15,
+            "sensor_silence_sec": 45,
+            "effect_tracking": {
+                "ph": {"default_recheck_sec": 60},
+                "ec": {"default_recheck_sec": 90},
+            },
+        },
+    },
+    "prod": {
+        "mqtt": {
+            "host": "localhost",
+            "port": 1883,
+            "reconnect_max": 30,
+        },
+        "llm": {
+            "timeout_sec": 90,
+            "dead_man_threshold": 3,
+        },
+        "telemetry": {
+            "bootstrap_grace_sec": 180,
+            "llm_min_fresh": {
+                "ph": ["ph"],
+                "ec": ["ec"],
+            },
+            "actuation_min_fresh": {
+                "ph": ["ph", "water_level"],
+                "ec": ["ec", "water_level"],
+            },
+        },
+        "safety_overrides": {},
+    },
+}
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+@dataclass(frozen=True)
+class RuntimeProfile:
+    name: str
+    settings: dict[str, Any]
+
+    @property
+    def mqtt_host(self) -> str:
+        return str(self.settings.get("mqtt", {}).get("host", "localhost"))
+
+    @property
+    def mqtt_port(self) -> int:
+        return int(self.settings.get("mqtt", {}).get("port", 1883))
+
+    @property
+    def mqtt_reconnect_max(self) -> int:
+        return int(self.settings.get("mqtt", {}).get("reconnect_max", 30))
+
+    @property
+    def llm_timeout_sec(self) -> int:
+        return int(self.settings.get("llm", {}).get("timeout_sec", 90))
+
+    @property
+    def dead_man_threshold(self) -> int:
+        return int(self.settings.get("llm", {}).get("dead_man_threshold", 3))
+
+    @property
+    def telemetry_bootstrap_grace_sec(self) -> int:
+        return int(self.settings.get("telemetry", {}).get("bootstrap_grace_sec", 180))
+
+    @property
+    def safety_overrides(self) -> dict[str, Any]:
+        return dict(self.settings.get("safety_overrides", {}))
+
+    def llm_min_fresh(self, metric: str) -> list[str]:
+        return list(self.settings.get("telemetry", {}).get("llm_min_fresh", {}).get(metric, [metric]))
+
+    def actuation_min_fresh(self, metric: str) -> list[str]:
+        return list(self.settings.get("telemetry", {}).get("actuation_min_fresh", {}).get(metric, [metric]))
+
+
+def load_runtime_profile() -> RuntimeProfile:
+    name = os.getenv("APP_PROFILE", "test").strip().lower() or "test"
+    if name not in PROFILE_DEFAULTS:
+        log.warning("Unknown APP_PROFILE '%s' - falling back to 'test'", name)
+        name = "test"
+
+    settings = copy.deepcopy(PROFILE_DEFAULTS[name])
+    settings["mqtt"]["host"] = os.getenv("MQTT_HOST", settings["mqtt"]["host"])
+    settings["mqtt"]["port"] = int(os.getenv("MQTT_PORT", str(settings["mqtt"]["port"])))
+    settings["mqtt"]["reconnect_max"] = int(os.getenv("MQTT_RECONNECT_MAX", str(settings["mqtt"]["reconnect_max"])))
+    settings["llm"]["timeout_sec"] = int(os.getenv("LLM_TIMEOUT_SEC", str(settings["llm"]["timeout_sec"])))
+    settings["llm"]["dead_man_threshold"] = int(os.getenv("DEAD_MAN_THRESHOLD", str(settings["llm"]["dead_man_threshold"])))
+    settings["telemetry"]["bootstrap_grace_sec"] = int(
+        os.getenv("TELEMETRY_BOOTSTRAP_GRACE_SEC", str(settings["telemetry"]["bootstrap_grace_sec"]))
+    )
+    return RuntimeProfile(name=name, settings=settings)
 
 
 class KnowledgeBaseConfig:
@@ -93,6 +221,9 @@ class KnowledgeBaseConfig:
     @property
     def safety_rules(self) -> dict[str, Any]:
         return dict(self._safety)
+
+    def safety_rules_for_profile(self, profile: RuntimeProfile) -> dict[str, Any]:
+        return _deep_merge(self.safety_rules, profile.safety_overrides)
 
     @property
     def multi_parameter_stress_count(self) -> int:
