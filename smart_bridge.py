@@ -730,6 +730,7 @@ class SmartMQTTBridge:
         status: str,
         reason: str,
         control_state: dict[str, Any],
+        snapshot: Optional[dict[str, Any]] = None,
     ) -> None:
         details = (
             f"{reason} | readiness={control_state.get('telemetry_state', {}).get('readiness', {}).get('state')} "
@@ -752,6 +753,41 @@ class SmartMQTTBridge:
                 },
                 ensure_ascii=False,
             ),
+        )
+        if snapshot is not None:
+            self._save_bridge_status(snapshot, control_state, source_status=f"decision:{status}")
+
+    def _save_bridge_status(
+        self,
+        snapshot: dict[str, Any],
+        control_state: dict[str, Any],
+        *,
+        source_status: str,
+    ) -> None:
+        telemetry_state = control_state.get("telemetry_state", {})
+        readiness = telemetry_state.get("readiness", {})
+        payload = {
+            "profile": PROFILE.name,
+            "dry_run": DRY_RUN,
+            "readiness": readiness,
+            "telemetry_state": telemetry_state,
+            "telemetry": {
+                metric: {
+                    "last": (snapshot.get(metric) or {}).get("last"),
+                    "trend": (snapshot.get(metric) or {}).get("trend"),
+                    "last_ts": (snapshot.get(metric) or {}).get("last_ts"),
+                }
+                for metric in ("ph", "ec", "water_level")
+            },
+            "deviations": control_state.get("deviations", []),
+            "risks": control_state.get("risks", []),
+        }
+        db.save_control_event(
+            "bridge_status",
+            "smart_bridge",
+            status=source_status[:40],
+            details=f"readiness={readiness.get('state', 'unknown')}",
+            context_json=json.dumps(payload, ensure_ascii=False),
         )
 
     def _maybe_control(self) -> None:
@@ -777,20 +813,26 @@ class SmartMQTTBridge:
                         "control_state": control_state,
                     },
                 ):
-                    self._log_control_decision("busy", reason, control_state)
+                    self._log_control_decision("busy", reason, control_state, snapshot)
                 else:
-                    self._log_control_decision("called", reason, control_state)
+                    self._log_control_decision("called", reason, control_state, snapshot)
                 return
             if control_state["deviations"]:
                 self._log_control_decision(
                     "skipped",
                     "fresh telemetry but deviations lack minimum reasoning inputs or are blocked by deterministic safety",
                     control_state,
+                    snapshot,
                 )
             else:
-                self._log_control_decision("skipped", "fresh telemetry but pH/EC already inside target", control_state)
+                self._log_control_decision("skipped", "fresh telemetry but pH/EC already inside target", control_state, snapshot)
         elif control_state["reasoning_metrics"] and self._control.heartbeat_due():
-            self._log_control_decision("waiting", "reasoning-capable deviation present but no new telemetry since last decision", control_state)
+            self._log_control_decision(
+                "waiting",
+                "reasoning-capable deviation present but no new telemetry since last decision",
+                control_state,
+                snapshot,
+            )
 
         if self._control.heartbeat_due():
             self._log_heartbeat(control_state, snapshot)
@@ -816,6 +858,7 @@ class SmartMQTTBridge:
                 round(float(ph), 3) if ph is not None else "n/a",
                 round(float(ec), 3) if ec is not None else "n/a",
             )
+            self._save_bridge_status(snapshot, control_state, source_status="heartbeat")
             return
 
         log.info(
@@ -825,6 +868,7 @@ class SmartMQTTBridge:
             json.dumps(risks, ensure_ascii=False),
             json.dumps(control_state.get("telemetry_state", {}), ensure_ascii=False),
         )
+        self._save_bridge_status(snapshot, control_state, source_status="heartbeat")
 
     def _fire_llm(self, request_type: str, context: Optional[dict]) -> bool:
         if not self._llm_busy.acquire(blocking=False):
@@ -933,6 +977,11 @@ class SmartMQTTBridge:
         log.info("InfluxDB: %s  bucket=%s", influx.INFLUX_URL, influx.INFLUX_BUCKET)
         log.info("Dry-run mode: %s", DRY_RUN)
         log.info("Operator reset topic: %s", OPERATOR_RESET_TOPIC)
+        startup_snapshot = self._aggregator.snapshot()
+        startup_targets = self._current_stage_targets()
+        startup_telemetry = self._telemetry_state(startup_snapshot)
+        startup_control_state = self._control.assess(startup_snapshot, startup_targets, startup_telemetry)
+        self._save_bridge_status(startup_snapshot, startup_control_state, source_status="startup")
 
         try:
             self._mqtt.connect(MQTT_HOST, MQTT_PORT, keepalive=60)

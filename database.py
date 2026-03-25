@@ -228,6 +228,24 @@ def get_recent_control_events(limit: int = 50) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def get_latest_control_event(event_type: str, source: Optional[str] = None) -> Optional[dict]:
+    query = (
+        "SELECT ts,event_type,source,metric,status,details,context_json"
+        " FROM control_events WHERE event_type=?"
+    )
+    params: list[object] = [event_type[:80]]
+    if source:
+        query += " AND source=?"
+        params.append(source[:80])
+    query += " ORDER BY id DESC LIMIT 1"
+
+    with _lock:
+        conn = get_conn()
+        row = conn.execute(query, params).fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+
 def get_current_escalation_state(metrics: Optional[list[str]] = None) -> dict[str, dict]:
     tracked_metrics = [str(metric).strip().lower() for metric in (metrics or ["ph", "ec"])]
     state = {
