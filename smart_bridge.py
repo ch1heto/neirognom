@@ -57,6 +57,7 @@ MQTT_HOST            = PROFILE.mqtt_host
 MQTT_PORT            = PROFILE.mqtt_port
 MQTT_TELEMETRY_TOPIC = f"farm/{TRAY_ID}/telemetry/#"
 MQTT_STATUS_TOPIC    = f"farm/{TRAY_ID}/status/#"
+MQTT_COMMAND_ACK_TOPIC = f"farm/{TRAY_ID}/ack/#"
 MQTT_RECONNECT_MAX   = PROFILE.mqtt_reconnect_max
 LLM_TIMEOUT_SEC      = PROFILE.llm_timeout_sec
 DEAD_MAN_THRESHOLD   = PROFILE.dead_man_threshold
@@ -525,6 +526,7 @@ class SmartMQTTBridge:
             recovery_protocols=KB_CONFIG.recovery_protocols,
             check_level=_check_level,
             thresholds=THRESHOLDS,
+            ack_timeout_sec=PROFILE.command_ack_timeout_sec,
         )
 
     def _on_connect(self, client, userdata, flags, reason_code, properties) -> None:
@@ -534,7 +536,9 @@ class SmartMQTTBridge:
             log.info("Connected to MQTT %s:%d", MQTT_HOST, MQTT_PORT)
             client.subscribe(MQTT_TELEMETRY_TOPIC)
             client.subscribe(MQTT_STATUS_TOPIC)
+            client.subscribe(MQTT_COMMAND_ACK_TOPIC)
             client.subscribe(OPERATOR_RESET_TOPIC)
+            log.info("Subscribed to command ack topic %s", MQTT_COMMAND_ACK_TOPIC)
             log.info("Subscribed to operator reset topic %s", OPERATOR_RESET_TOPIC)
         else:
             log.error("MQTT connect failed rc=%s", reason_code)
@@ -573,6 +577,8 @@ class SmartMQTTBridge:
                     self._active_actuators[key] = msg.payload.decode("utf-8").strip()
                 except Exception:
                     pass
+        elif "/ack/" in topic:
+            self._gateway.handle_ack(topic, msg.payload)
         elif topic == OPERATOR_RESET_TOPIC:
             self._handle_operator_reset(msg.payload)
 
@@ -904,6 +910,7 @@ class SmartMQTTBridge:
         log.info("profile=%s", PROFILE.name)
         log.info("logging=%s", PROFILE.log_level)
         log.info("mqtt=%s:%d", MQTT_HOST, MQTT_PORT)
+        log.info("command_ack_topic=%s timeout=%ss", MQTT_COMMAND_ACK_TOPIC, PROFILE.command_ack_timeout_sec)
         log.info(
             "telemetry_profile control=%s actuation_safety=%s optional=%s not_onboarded=%s",
             PROFILE.telemetry_metric_roles.get("required_for_control", []),
@@ -938,6 +945,7 @@ class SmartMQTTBridge:
 
         try:
             while True:
+                self._gateway.poll_ack_timeouts()
                 self._eval_alerts()
                 self._maybe_write_influx()
                 self._maybe_control()

@@ -4,6 +4,8 @@ import json
 import logging
 import threading
 import time
+import uuid
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import paho.mqtt.client as mqtt
@@ -12,6 +14,24 @@ from pydantic import BaseModel, Field, ValidationError
 import database as db
 
 log = logging.getLogger("command_gateway")
+ACK_PENDING_STATES = {"sent", "received", "executing"}
+ACK_FINAL_STATES = {"done", "failed", "timeout"}
+
+
+@dataclass
+class PendingCommand:
+    command_id: str
+    actuator: str
+    action: str
+    topic: str
+    reason: str
+    duration_sec: Optional[int]
+    created_at: float
+    timeout_at: float
+    snapshot: Optional[dict[str, Any]]
+    recheck_interval_sec: Optional[int]
+    llm_req_id: Optional[int]
+    ack_state: str = "sent"
 
 
 class ParsedCommand(BaseModel):
@@ -46,6 +66,7 @@ class HybridCommandGateway:
         recovery_protocols: dict[str, Any],
         check_level: Any,
         thresholds: dict[str, Any],
+        ack_timeout_sec: int,
     ) -> None:
         self._client = mqtt_client
         self._safety = safety
@@ -59,9 +80,12 @@ class HybridCommandGateway:
         self._recovery_protocols = recovery_protocols
         self._check_level = check_level
         self._thresholds = thresholds
+        self._ack_timeout_sec = ack_timeout_sec
         self._req_id: Optional[int] = None
         self._dose_counts: dict[str, int] = {}
         self._dose_reset: dict[str, float] = {}
+        self._pending_commands: dict[str, PendingCommand] = {}
+        self._pending_lock = threading.Lock()
 
     def set_req_id(self, req_id: Optional[int]) -> None:
         self._req_id = req_id
@@ -82,6 +106,120 @@ class HybridCommandGateway:
 
     def _inc_dose(self, actuator: str) -> None:
         self._dose_counts[actuator] = self._dose_counts.get(actuator, 0) + 1
+
+    @staticmethod
+    def _new_command_id() -> str:
+        return f"cmd-{uuid.uuid4().hex[:12]}"
+
+    def poll_ack_timeouts(self) -> None:
+        if self._dry_run:
+            return
+
+        now = time.time()
+        timed_out: list[PendingCommand] = []
+        with self._pending_lock:
+            for command_id, pending in list(self._pending_commands.items()):
+                if pending.timeout_at <= now and pending.ack_state in ACK_PENDING_STATES:
+                    timed_out.append(self._pending_commands.pop(command_id))
+
+        for pending in timed_out:
+            log.error(
+                "Command ack timeout: command_id=%s actuator=%s action=%s topic=%s",
+                pending.command_id,
+                pending.actuator,
+                pending.action,
+                pending.topic,
+            )
+            db.update_command_status(pending.command_id, "ACK_TIMEOUT", ack_state="timeout")
+            db.save_control_event(
+                "command_ack",
+                "command_gateway",
+                metric=pending.actuator,
+                status="timeout",
+                details=f"command_id={pending.command_id} action={pending.action}",
+                context_json=json.dumps(
+                    {
+                        "command_id": pending.command_id,
+                        "topic": pending.topic,
+                        "action": pending.action,
+                        "reason": pending.reason,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    def handle_ack(self, topic: str, payload: bytes) -> None:
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            log.warning("Ignoring malformed command ack on %s", topic)
+            return
+
+        if not isinstance(data, dict):
+            return
+
+        command_id = str(data.get("command_id", "")).strip()
+        ack_state = str(data.get("ack_state") or data.get("state") or data.get("status") or "").strip().lower()
+        if not command_id or ack_state not in ACK_PENDING_STATES | ACK_FINAL_STATES:
+            log.warning("Ignoring command ack with missing command_id/state on %s", topic)
+            return
+
+        with self._pending_lock:
+            pending = self._pending_commands.get(command_id)
+            if pending is None:
+                db.save_control_event(
+                    "command_ack",
+                    "command_gateway",
+                    status="unknown_command",
+                    details=f"command_id={command_id} state={ack_state}",
+                    context_json=json.dumps(data, ensure_ascii=False)[:4000],
+                )
+                return
+            pending.ack_state = ack_state
+            if ack_state in ACK_FINAL_STATES:
+                self._pending_commands.pop(command_id, None)
+
+        details = str(data.get("message") or data.get("error") or "").strip()
+        log.info(
+            "Command ack: command_id=%s actuator=%s state=%s %s",
+            command_id,
+            pending.actuator,
+            ack_state,
+            details,
+        )
+        db.update_command_status(
+            command_id,
+            "EXECUTED" if ack_state == "done" else ("FAILED" if ack_state == "failed" else f"ACK_{ack_state.upper()}"),
+            ack_state=ack_state,
+        )
+        db.save_control_event(
+            "command_ack",
+            "command_gateway",
+            metric=pending.actuator,
+            status=ack_state,
+            details=f"command_id={command_id} action={pending.action} {details}".strip(),
+            context_json=json.dumps(data, ensure_ascii=False)[:4000],
+        )
+
+        if ack_state == "done":
+            db.update_actuator_state(pending.actuator, pending.action)
+            if pending.action in ("ON", "OPEN"):
+                self._inc_dose(pending.actuator)
+            if pending.duration_sec and pending.action not in ("OFF", "CLOSE"):
+                self._auto_off(pending.actuator, pending.duration_sec)
+            if pending.snapshot is not None:
+                self._safety.register_published_commands(
+                    [
+                        {
+                            "actuator": pending.actuator,
+                            "action": pending.action,
+                            "duration_sec": pending.duration_sec,
+                            "reason": pending.reason,
+                        }
+                    ],
+                    pending.snapshot,
+                    pending.recheck_interval_sec,
+                )
 
     def process(self, raw: str, snapshot: dict, request_type: str) -> tuple[bool, Optional[ParsedPolicy]]:
         parsed = self._parse(raw)
@@ -125,28 +263,39 @@ class HybridCommandGateway:
         published_commands: list[dict[str, Any]] = []
         for cmd in validated:
             topic = self._actuator_topics[cmd.actuator]
-            ok, status = self._publish_action(topic, cmd.actuator, cmd.action, cmd.duration_sec, cmd.reason)
+            ok, status, command_id = self._publish_action(
+                topic,
+                cmd.actuator,
+                cmd.action,
+                cmd.duration_sec,
+                cmd.reason,
+                snapshot=snapshot,
+                recheck_interval_sec=parsed.recheck_interval_sec,
+            )
             if ok:
-                db.update_actuator_state(cmd.actuator, cmd.action)
                 published = True
                 published_commands.append(cmd.model_dump())
-                if cmd.action in ("ON", "OPEN"):
-                    self._inc_dose(cmd.actuator)
-                if cmd.duration_sec and cmd.action not in ("OFF", "CLOSE"):
-                    self._auto_off(cmd.actuator, cmd.duration_sec)
 
-            db.save_command(self._req_id, cmd.actuator, cmd.action, cmd.duration_sec, cmd.reason, topic, status)
+            db.save_command(
+                self._req_id,
+                cmd.actuator,
+                cmd.action,
+                cmd.duration_sec,
+                cmd.reason,
+                topic,
+                status,
+                command_id=command_id,
+                ack_state="done" if status == "DRY_RUN" else ("sent" if ok else None),
+            )
             db.save_control_event(
                 "command_execution",
                 "command_gateway",
                 metric=cmd.actuator,
                 status=status,
-                details=f"{cmd.action} duration={cmd.duration_sec} reason={cmd.reason[:120]}",
+                details=f"{cmd.action} duration={cmd.duration_sec} reason={cmd.reason[:120]} command_id={command_id or '-'}",
             )
 
-        if published_commands and not self._dry_run:
-            self._safety.register_published_commands(published_commands, snapshot, parsed.recheck_interval_sec)
-        elif published_commands and self._dry_run:
+        if published_commands and self._dry_run:
             log.info("Dry-run active: effect tracking skipped for %d command(s)", len(published_commands))
             db.save_control_event("dry_run", "command_gateway", status="effect_tracking_skipped", details=f"commands={len(published_commands)}")
         return published, parsed
@@ -247,32 +396,104 @@ class HybridCommandGateway:
         action: str,
         duration_sec: Optional[int],
         reason: str,
-    ) -> tuple[bool, str]:
+        *,
+        snapshot: Optional[dict[str, Any]] = None,
+        recheck_interval_sec: Optional[int] = None,
+    ) -> tuple[bool, str, Optional[str]]:
         if self._dry_run:
             log.info("[DRY_RUN] %-46s -> %-8s | %s", topic, action, reason)
-            return True, "DRY_RUN"
+            return True, "DRY_RUN", None
 
-        result = self._client.publish(topic, action)
+        command_id = self._new_command_id()
+        payload = json.dumps(
+            {
+                "command_id": command_id,
+                "actuator": actuator,
+                "action": action,
+                "duration_sec": duration_sec,
+                "reason": reason[:200],
+                "llm_req_id": self._req_id,
+                "issued_at": int(time.time()),
+            },
+            ensure_ascii=False,
+        )
+        result = self._client.publish(topic, payload)
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             log.error("Publish failed %s rc=%d", topic, result.rc)
-            return False, "FAIL"
-        log.info("Publish %-46s -> %-8s | %s", topic, action, reason)
-        return True, "OK"
+            return False, "FAIL", command_id
+        with self._pending_lock:
+            self._pending_commands[command_id] = PendingCommand(
+                command_id=command_id,
+                actuator=actuator,
+                action=action,
+                topic=topic,
+                reason=reason[:200],
+                duration_sec=duration_sec,
+                created_at=time.time(),
+                timeout_at=time.time() + self._ack_timeout_sec,
+                snapshot=snapshot,
+                recheck_interval_sec=recheck_interval_sec,
+                llm_req_id=self._req_id,
+            )
+        log.info("Publish %-46s -> %-8s | %s | command_id=%s", topic, action, reason, command_id)
+        db.save_control_event(
+            "command_dispatch",
+            "command_gateway",
+            metric=actuator,
+            status="pending_ack",
+            details=f"{action} command_id={command_id}",
+            context_json=payload[:4000],
+        )
+        return True, "PENDING_ACK", command_id
 
-    def _publish_direct(self, actuator: str, action: str, duration_sec: Optional[int], reason: str) -> bool:
+    def _publish_direct(
+        self,
+        actuator: str,
+        action: str,
+        duration_sec: Optional[int],
+        reason: str,
+        *,
+        snapshot: Optional[dict[str, Any]] = None,
+        recheck_interval_sec: Optional[int] = None,
+    ) -> bool:
         topic = self._actuator_topics.get(actuator)
         if not topic:
             return False
-        ok, status = self._publish_action(topic, actuator, action, duration_sec, reason)
+        ok, status, command_id = self._publish_action(
+            topic,
+            actuator,
+            action,
+            duration_sec,
+            reason,
+            snapshot=snapshot,
+            recheck_interval_sec=recheck_interval_sec,
+        )
         if not ok:
             return False
-        db.update_actuator_state(actuator, action)
-        if action in ("ON", "OPEN"):
-            self._inc_dose(actuator)
-        if duration_sec and action not in ("OFF", "CLOSE"):
-            self._auto_off(actuator, duration_sec)
-        db.save_command(self._req_id, actuator, action, duration_sec, reason, topic, status)
-        db.save_control_event("fallback_command", "command_gateway", metric=actuator, status=status, details=f"{action} duration={duration_sec} reason={reason[:120]}")
+        if self._dry_run:
+            db.update_actuator_state(actuator, action)
+            if action in ("ON", "OPEN"):
+                self._inc_dose(actuator)
+            if duration_sec and action not in ("OFF", "CLOSE"):
+                self._auto_off(actuator, duration_sec)
+        db.save_command(
+            self._req_id,
+            actuator,
+            action,
+            duration_sec,
+            reason,
+            topic,
+            status,
+            command_id=command_id,
+            ack_state="done" if status == "DRY_RUN" else ("sent" if ok else None),
+        )
+        db.save_control_event(
+            "fallback_command",
+            "command_gateway",
+            metric=actuator,
+            status=status,
+            details=f"{action} duration={duration_sec} reason={reason[:120]} command_id={command_id or '-'}",
+        )
         return True
 
     def _fallback_spec(self, protocol_key: str, severity: str) -> tuple[list[dict[str, Any]], int | None]:
@@ -313,12 +534,17 @@ class HybridCommandGateway:
 
         published_commands: list[dict[str, Any]] = []
         for cmd in validated:
-            if self._publish_direct(cmd.actuator, cmd.action, cmd.duration_sec, cmd.reason):
+            if self._publish_direct(
+                cmd.actuator,
+                cmd.action,
+                cmd.duration_sec,
+                cmd.reason,
+                snapshot=snapshot,
+                recheck_interval_sec=recheck_sec,
+            ):
                 published_commands.append(cmd.model_dump())
 
-        if published_commands and not self._dry_run:
-            self._safety.register_published_commands(published_commands, snapshot, recheck_sec)
-        elif published_commands and self._dry_run:
+        if published_commands and self._dry_run:
             db.save_control_event("dry_run", "command_gateway", status="fallback_effect_tracking_skipped", details=f"commands={len(published_commands)}")
             return True
         return bool(published_commands)
@@ -334,9 +560,25 @@ class HybridCommandGateway:
                 log.info("[DRY_RUN] AUTO-%-5s %-46s (after %ds)", off_action, topic, duration_sec)
                 db.update_actuator_state(actuator, off_action)
                 return
-            result = self._client.publish(topic, off_action)
-            if result.rc == mqtt.MQTT_ERR_SUCCESS:
-                log.info("AUTO-%-5s %-46s (after %ds)", off_action, topic, duration_sec)
-                db.update_actuator_state(actuator, off_action)
+            ok, status, command_id = self._publish_action(
+                topic,
+                actuator,
+                off_action,
+                None,
+                f"auto_off:{duration_sec}s",
+            )
+            if ok:
+                db.save_command(
+                    self._req_id,
+                    actuator,
+                    off_action,
+                    None,
+                    f"auto_off:{duration_sec}s",
+                    topic,
+                    status,
+                    command_id=command_id,
+                    ack_state="sent",
+                )
+                log.info("AUTO-%-5s %-46s (after %ds) | command_id=%s", off_action, topic, duration_sec, command_id)
 
         threading.Thread(target=_off, daemon=True, name=f"AutoOff-{actuator}").start()

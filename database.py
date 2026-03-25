@@ -56,12 +56,14 @@ def init_db() -> None:
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts           INTEGER NOT NULL,
                 llm_req_id   INTEGER REFERENCES llm_requests(id),
+                command_id   TEXT,
                 actuator     TEXT    NOT NULL,
                 action       TEXT    NOT NULL,
                 duration_sec INTEGER,
                 reason       TEXT,
                 mqtt_topic   TEXT,
-                exec_status  TEXT
+                exec_status  TEXT,
+                ack_state    TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_cmd_ts ON commands(ts);
 
@@ -90,9 +92,19 @@ def init_db() -> None:
                 retries  INTEGER NOT NULL DEFAULT 0
             );
         """)
+        _ensure_column(conn, "commands", "command_id", "TEXT")
+        _ensure_column(conn, "commands", "ack_state", "TEXT")
         conn.commit()
         conn.close()
     _maintenance()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    existing = {row["name"] for row in rows}
+    if column in existing:
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
 
 
 def _maintenance() -> None:
@@ -148,15 +160,30 @@ def save_llm_request(
 def save_command(
     llm_req_id: Optional[int], actuator: str, action: str,
     duration_sec: Optional[int], reason: str, mqtt_topic: str, exec_status: str,
+    command_id: Optional[str] = None,
+    ack_state: Optional[str] = None,
 ) -> None:
     with _lock:
         conn = get_conn()
         conn.execute(
             "INSERT INTO commands"
-            "(ts,llm_req_id,actuator,action,duration_sec,reason,mqtt_topic,exec_status)"
-            " VALUES(?,?,?,?,?,?,?,?)",
-            (int(time.time()), llm_req_id, actuator, action,
-             duration_sec, reason[:200], mqtt_topic, exec_status),
+            "(ts,llm_req_id,command_id,actuator,action,duration_sec,reason,mqtt_topic,exec_status,ack_state)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (int(time.time()), llm_req_id, command_id, actuator, action,
+             duration_sec, reason[:200], mqtt_topic, exec_status, ack_state),
+        )
+        conn.commit()
+        conn.close()
+
+
+def update_command_status(command_id: str, exec_status: str, ack_state: Optional[str] = None) -> None:
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "UPDATE commands"
+            " SET exec_status=?, ack_state=COALESCE(?, ack_state)"
+            " WHERE command_id=?",
+            (exec_status[:40], ack_state[:40] if ack_state else None, command_id[:80]),
         )
         conn.commit()
         conn.close()

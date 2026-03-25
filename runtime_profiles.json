@@ -8,6 +8,9 @@
     "logging": {
       "level": "DEBUG"
     },
+    "command": {
+      "ack_timeout_sec": 5
+    },
     "llm": {
       "timeout_sec": 30,
       "dead_man_threshold": 2
@@ -54,6 +57,9 @@
     },
     "logging": {
       "level": "INFO"
+    },
+    "command": {
+      "ack_timeout_sec": 15
     },
     "llm": {
       "timeout_sec": 90,

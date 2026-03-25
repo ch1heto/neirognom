@@ -24,6 +24,9 @@ BUILTIN_PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
         "logging": {
             "level": "DEBUG",
         },
+        "command": {
+            "ack_timeout_sec": 5,
+        },
         "llm": {
             "timeout_sec": 30,
             "dead_man_threshold": 2,
@@ -66,6 +69,9 @@ BUILTIN_PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
         },
         "logging": {
             "level": "INFO",
+        },
+        "command": {
+            "ack_timeout_sec": 15,
         },
         "llm": {
             "timeout_sec": 90,
@@ -127,6 +133,10 @@ class RuntimeProfile:
     @property
     def log_level(self) -> str:
         return str(self.settings.get("logging", {}).get("level", "INFO")).upper()
+
+    @property
+    def command_ack_timeout_sec(self) -> int:
+        return int(self.settings.get("command", {}).get("ack_timeout_sec", 15))
 
     @property
     def llm_timeout_sec(self) -> int:
@@ -246,6 +256,9 @@ def load_runtime_profile() -> RuntimeProfile:
     settings["mqtt"]["port"] = int(os.getenv("MQTT_PORT", str(settings["mqtt"]["port"])))
     settings["mqtt"]["reconnect_max"] = int(os.getenv("MQTT_RECONNECT_MAX", str(settings["mqtt"]["reconnect_max"])))
     settings["logging"]["level"] = os.getenv("LOG_LEVEL", settings["logging"]["level"]).upper()
+    settings["command"]["ack_timeout_sec"] = int(
+        os.getenv("COMMAND_ACK_TIMEOUT_SEC", str(settings["command"]["ack_timeout_sec"]))
+    )
     settings["llm"]["timeout_sec"] = int(os.getenv("LLM_TIMEOUT_SEC", str(settings["llm"]["timeout_sec"])))
     settings["llm"]["dead_man_threshold"] = int(os.getenv("DEAD_MAN_THRESHOLD", str(settings["llm"]["dead_man_threshold"])))
     settings["telemetry"]["bootstrap_grace_sec"] = int(

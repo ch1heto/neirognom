@@ -32,6 +32,30 @@ def on_connect(client, userdata, flags, rc):
 def on_message(client, userdata, msg):
     payload = msg.payload.decode("utf-8", errors="replace")
     print(f"[CMD RECEIVED] Topic: {msg.topic}, Payload: {payload}")
+    try:
+        command = json.loads(payload)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(command, dict):
+        return
+    command_id = str(command.get("command_id", "")).strip()
+    if not command_id:
+        return
+    ack_topic = msg.topic.replace("/cmd/", "/ack/", 1)
+    for state in ("received", "executing", "done"):
+        ack_payload = json.dumps(
+            {
+                "command_id": command_id,
+                "ack_state": state,
+                "actuator": command.get("actuator"),
+                "action": command.get("action"),
+                "timestamp": int(time.time()),
+            }
+        )
+        client.publish(ack_topic, ack_payload)
+        print(f"[ACK] {ack_topic} -> {ack_payload}")
+        if state != "done":
+            time.sleep(0.2)
 
 
 client = mqtt.Client(client_id="sim_esp32")

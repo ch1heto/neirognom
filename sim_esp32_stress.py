@@ -75,13 +75,40 @@ def reset_fault_baseline():
 
 
 def apply_control_command(topic: str, payload: str):
+    try:
+        command = json.loads(payload)
+    except json.JSONDecodeError:
+        command = {"action": payload}
+
+    action = str(command.get("action", payload))
     actuator = topic.split("/")[-1]
     if actuator == "ph_down":
-        _apply_ph_down(payload)
+        _apply_ph_down(action)
     elif actuator == "ph_up":
-        _apply_ph_up(payload)
+        _apply_ph_up(action)
     elif actuator in {"nutrient_a", "nutrient_b"}:
-        _apply_ec_up(payload, actuator)
+        _apply_ec_up(action, actuator)
+
+    return command
+
+
+def publish_ack(client: mqtt.Client, topic: str, command: dict, state: str, message: str = ""):
+    command_id = str(command.get("command_id", "")).strip()
+    if not command_id:
+        return
+    ack_topic = topic.replace("/cmd/", "/ack/", 1)
+    ack_payload = json.dumps(
+        {
+            "command_id": command_id,
+            "ack_state": state,
+            "actuator": command.get("actuator"),
+            "action": command.get("action"),
+            "message": message,
+            "timestamp": int(time.time()),
+        }
+    )
+    client.publish(ack_topic, ack_payload)
+    print(f"[ACK] {ack_topic} -> {ack_payload}")
 
 
 def _apply_ph_down(payload: str):
@@ -198,7 +225,12 @@ def on_message(client, userdata, msg):
     print(f"[CMD] Topic:   {msg.topic}")
     print(f"[CMD] Payload: {payload}")
     print(f"{'!' * 60}\n")
-    apply_control_command(msg.topic, payload)
+    command = apply_control_command(msg.topic, payload)
+    publish_ack(client, msg.topic, command, "received", "queued")
+    time.sleep(0.1)
+    publish_ack(client, msg.topic, command, "executing", "relay active")
+    time.sleep(0.1)
+    publish_ack(client, msg.topic, command, "done", "completed")
 
 
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="sim_esp32_stress")
