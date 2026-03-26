@@ -289,11 +289,31 @@ class HybridCommandGateway:
         if not validated:
             db.save_control_event("command_batch", "command_gateway", status="rejected", details="all commands rejected")
             return False, parsed
+        db.save_control_event(
+            "command_batch",
+            "command_gateway",
+            status="accepted",
+            details=f"validated={len(validated)}/{len(parsed.recommended_commands)} risk={parsed.risk_level}",
+            context_json=json.dumps(
+                {
+                    "selected_strategy": parsed.selected_strategy,
+                    "validated_commands": [cmd.model_dump() for cmd in validated],
+                },
+                ensure_ascii=False,
+            ),
+        )
 
         published = False
         published_commands: list[dict[str, Any]] = []
         for cmd in validated:
             topic = self._actuator_topics[cmd.actuator]
+            db.save_control_event(
+                "command_accepted",
+                "command_gateway",
+                metric=cmd.actuator,
+                status="validated",
+                details=f"{cmd.action} duration={cmd.duration_sec} reason={cmd.reason[:120]}",
+            )
             ok, status, command_id = self._publish_action(
                 topic,
                 cmd.actuator,

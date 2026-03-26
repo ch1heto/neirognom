@@ -213,6 +213,8 @@ Key `control_events` emitted by the bridge stack:
 - `llm_context`
 - `llm_result`
 - `policy_result`
+- `command_batch`
+- `command_accepted`
 - `command_rejected`
 - `command_dispatch`
 - `command_execution`
