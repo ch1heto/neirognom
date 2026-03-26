@@ -351,6 +351,13 @@ class KnowledgeBaseConfig:
     def safety_rules(self) -> dict[str, Any]:
         return dict(self._safety)
 
+    @property
+    def control_scope(self) -> list[str]:
+        scope = self._safety.get("_meta", {}).get("scope")
+        if isinstance(scope, list) and scope:
+            return [str(item) for item in scope]
+        return ["ph", "ec"]
+
     def safety_rules_for_profile(self, profile: RuntimeProfile) -> dict[str, Any]:
         return _deep_merge(self.safety_rules, profile.safety_overrides)
 

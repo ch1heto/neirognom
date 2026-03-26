@@ -6,10 +6,10 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import paho.mqtt.client as mqtt
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 import database as db
 
@@ -35,19 +35,25 @@ class PendingCommand:
 
 
 class ParsedCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
     actuator: str
-    action: str
+    action: Literal["ON", "OFF", "OPEN", "CLOSE", "DIM_50"]
     duration_sec: Optional[int] = Field(default=None, ge=0)
     reason: str = ""
 
 
 class ParsedPolicy(BaseModel):
-    situation_summary: str = ""
-    selected_control_strategy: str = ""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    summary: str = ""
+    selected_strategy: str = ""
+    risk_level: Literal["low", "medium", "high", "critical"] = "low"
     risks: list[str] = []
-    commands: list[ParsedCommand] = []
+    recommended_commands: list[ParsedCommand] = []
     recheck_interval_sec: Optional[int] = Field(default=None, ge=0)
     stop_conditions: list[str] = []
+    escalation_conditions: list[str] = []
 
 
 class HybridCommandGateway:
@@ -86,6 +92,24 @@ class HybridCommandGateway:
         self._dose_reset: dict[str, float] = {}
         self._pending_commands: dict[str, PendingCommand] = {}
         self._pending_lock = threading.Lock()
+
+    def pending_commands_snapshot(self) -> list[dict[str, Any]]:
+        now = time.time()
+        with self._pending_lock:
+            return [
+                {
+                    "command_id": pending.command_id,
+                    "actuator": pending.actuator,
+                    "action": pending.action,
+                    "topic": pending.topic,
+                    "reason": pending.reason,
+                    "duration_sec": pending.duration_sec,
+                    "ack_state": pending.ack_state,
+                    "age_sec": round(max(0.0, now - pending.created_at), 1),
+                    "timeout_in_sec": round(max(0.0, pending.timeout_at - now), 1),
+                }
+                for pending in self._pending_commands.values()
+            ]
 
     def set_req_id(self, req_id: Optional[int]) -> None:
         self._req_id = req_id
@@ -227,20 +251,25 @@ class HybridCommandGateway:
             db.save_control_event("policy_result", "command_gateway", status="parse_failed", details=request_type)
             return False, None
 
-        if parsed.situation_summary:
-            log.info("Policy: %s", parsed.situation_summary[:160])
-        if parsed.selected_control_strategy:
-            log.info("Strategy: %s", parsed.selected_control_strategy[:160])
+        if parsed.summary:
+            log.info("Policy summary: %s", parsed.summary[:160])
+        if parsed.selected_strategy:
+            log.info("Policy strategy: %s", parsed.selected_strategy[:160])
+        log.info("Policy risk level: %s", parsed.risk_level)
         db.save_control_event(
             "policy_result",
             "command_gateway",
             status="parsed",
-            details=parsed.selected_control_strategy[:200] or parsed.situation_summary[:200],
+            details=parsed.selected_strategy[:200] or parsed.summary[:200],
             context_json=json.dumps(
                 {
+                    "summary": parsed.summary,
+                    "selected_strategy": parsed.selected_strategy,
+                    "risk_level": parsed.risk_level,
                     "risks": parsed.risks[:10],
                     "recheck_interval_sec": parsed.recheck_interval_sec,
-                    "command_count": len(parsed.commands),
+                    "command_count": len(parsed.recommended_commands),
+                    "escalation_conditions": parsed.escalation_conditions[:10],
                 },
                 ensure_ascii=False,
             ),
@@ -249,12 +278,14 @@ class HybridCommandGateway:
             log.warning("Policy risk: %s", risk)
         for condition in parsed.stop_conditions:
             log.warning("Stop condition: %s", condition)
+        for condition in parsed.escalation_conditions:
+            log.warning("Escalation condition: %s", condition)
 
-        if not parsed.commands:
-            db.save_control_event("policy_result", "command_gateway", status="no_commands", details=parsed.situation_summary[:200])
+        if not parsed.recommended_commands:
+            db.save_control_event("policy_result", "command_gateway", status="no_commands", details=parsed.summary[:200])
             return True, parsed
 
-        validated = self._validate(parsed.commands, snapshot)
+        validated = self._validate(parsed.recommended_commands, snapshot)
         if not validated:
             db.save_control_event("command_batch", "command_gateway", status="rejected", details="all commands rejected")
             return False, parsed
@@ -310,33 +341,16 @@ class HybridCommandGateway:
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            import re
+            log.error("OpenClaw returned invalid JSON")
+            return None
 
-            m = re.search(r"\{[\s\S]+\}", text)
-            if not m:
-                return None
-            try:
-                data = json.loads(m.group())
-            except json.JSONDecodeError:
-                return None
-
-        if "analysis" in data and "situation_summary" not in data:
-            data["situation_summary"] = data["analysis"]
-        if "summary" in data and "situation_summary" not in data:
-            data["situation_summary"] = data["summary"]
-        if "strategy" in data and "selected_control_strategy" not in data:
-            data["selected_control_strategy"] = data["strategy"]
-        if "recommendations" in data and "stop_conditions" not in data:
-            data["stop_conditions"] = data["recommendations"]
-        if "actuators" in data and "commands" not in data:
-            data["commands"] = [
-                {"actuator": k, "action": v, "duration_sec": None, "reason": "from actuators"}
-                for k, v in data["actuators"].items()
-                if isinstance(v, str) and v in ("ON", "OFF", "OPEN", "CLOSE", "DIM_50")
-            ]
+        if not isinstance(data, dict):
+            log.error("OpenClaw response must be a JSON object")
+            return None
         try:
             return ParsedPolicy.model_validate(data)
-        except ValidationError:
+        except ValidationError as exc:
+            log.error("OpenClaw policy schema validation failed: %s", exc)
             return None
 
     def _validate(self, commands: list[ParsedCommand], snapshot: dict) -> list[ParsedCommand]:

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenClawPolicyResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "summary",
+    "selected_strategy",
+    "risk_level",
+    "risks",
+    "recommended_commands",
+    "recheck_interval_sec",
+    "stop_conditions",
+    "escalation_conditions"
+  ],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "selected_strategy": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "risks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "recommended_commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["actuator", "action", "duration_sec", "reason"],
+        "properties": {
+          "actuator": { "type": "string", "maxLength": 80 },
+          "action": {
+            "type": "string",
+            "enum": ["ON", "OFF", "OPEN", "CLOSE", "DIM_50"]
+          },
+          "duration_sec": {
+            "type": ["integer", "null"],
+            "minimum": 0
+          },
+          "reason": { "type": "string", "maxLength": 500 }
+        }
+      }
+    },
+    "recheck_interval_sec": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "stop_conditions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "escalation_conditions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

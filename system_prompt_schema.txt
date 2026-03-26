@@ -1,20 +1,18 @@
-Return exactly this JSON object:
+Return exactly one JSON object that matches the OpenClaw policy schema.
 
-{
-  "situation_summary": "short factual summary",
-  "selected_control_strategy": "strategy choice for pH/EC correction",
-  "risks": ["risk or caution"],
-  "commands": [
-    {
-      "actuator": "logical actuator name from actuator_capabilities",
-      "action": "ON | OFF | OPEN | CLOSE | DIM_50",
-      "duration_sec": 5,
-      "reason": "short reason"
-    }
-  ],
-  "recheck_interval_sec": 900,
-  "stop_conditions": ["condition that should stop auto-recovery or require operator"]
-}
+Required top-level fields:
+- summary
+- selected_strategy
+- risk_level
+- risks
+- recommended_commands
+- recheck_interval_sec
+- stop_conditions
+- escalation_conditions
 
-If no action is needed or safe, return "commands": [].
-Do not add markdown or extra text.
+Behavior rules:
+- `recommended_commands` must be an array of logical actuator commands, not MQTT payloads.
+- Use only actuator names that appear in `actuator_capabilities`.
+- `risk_level` must be one of: `low`, `medium`, `high`, `critical`.
+- If no safe action is recommended, return `"recommended_commands": []`.
+- Do not add markdown, comments, or extra keys.

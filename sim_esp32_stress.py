@@ -81,6 +81,12 @@ def apply_control_command(topic: str, payload: str):
         command = {"action": payload}
 
     action = str(command.get("action", payload))
+    actuator_name = str(command.get("actuator", ""))
+    if actuator_name in {"ph_down_pump", "ph_up_pump", "nutrient_a", "nutrient_b"} and action == "ON":
+        if float(_state.get("water_level", 0.0)) < 30.0:
+            print("[EDGE_FAILSAFE] low water blocked chemical command")
+            return command, "failed", "low_water_edge_failsafe"
+
     actuator = topic.split("/")[-1]
     if actuator == "ph_down":
         _apply_ph_down(action)
@@ -89,7 +95,7 @@ def apply_control_command(topic: str, payload: str):
     elif actuator in {"nutrient_a", "nutrient_b"}:
         _apply_ec_up(action, actuator)
 
-    return command
+    return command, "done", "completed"
 
 
 def publish_ack(client: mqtt.Client, topic: str, command: dict, state: str, message: str = ""):
@@ -225,12 +231,16 @@ def on_message(client, userdata, msg):
     print(f"[CMD] Topic:   {msg.topic}")
     print(f"[CMD] Payload: {payload}")
     print(f"{'!' * 60}\n")
-    command = apply_control_command(msg.topic, payload)
+    command, terminal_state, terminal_message = apply_control_command(msg.topic, payload)
     publish_ack(client, msg.topic, command, "received", "queued")
+    if terminal_state == "failed":
+        time.sleep(0.1)
+        publish_ack(client, msg.topic, command, "failed", terminal_message)
+        return
     time.sleep(0.1)
     publish_ack(client, msg.topic, command, "executing", "relay active")
     time.sleep(0.1)
-    publish_ack(client, msg.topic, command, "done", "completed")
+    publish_ack(client, msg.topic, command, terminal_state, terminal_message)
 
 
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="sim_esp32_stress")

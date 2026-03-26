@@ -18,6 +18,7 @@ SENSORS = {
     f"farm/{TRAY_ID}/telemetry/ph":          (5.5,  6.5),
     f"farm/{TRAY_ID}/telemetry/ec":          (1.0,  2.5),
 }
+last_sensor_values = {}
 
 
 def on_connect(client, userdata, flags, rc):
@@ -41,7 +42,25 @@ def on_message(client, userdata, msg):
     command_id = str(command.get("command_id", "")).strip()
     if not command_id:
         return
+    actuator = str(command.get("actuator", ""))
+    action = str(command.get("action", ""))
     ack_topic = msg.topic.replace("/cmd/", "/ack/", 1)
+    if actuator in {"ph_down_pump", "ph_up_pump", "nutrient_a", "nutrient_b"} and action == "ON":
+        water_level = last_sensor_values.get("water_level")
+        if water_level is not None and float(water_level) < 30.0:
+            ack_payload = json.dumps(
+                {
+                    "command_id": command_id,
+                    "ack_state": "failed",
+                    "actuator": actuator,
+                    "action": action,
+                    "error": "low_water_edge_failsafe",
+                    "timestamp": int(time.time()),
+                }
+            )
+            client.publish(ack_topic, ack_payload)
+            print(f"[ACK] {ack_topic} -> {ack_payload}")
+            return
     for state in ("received", "executing", "done"):
         ack_payload = json.dumps(
             {
@@ -72,6 +91,7 @@ try:
         timestamp = time.time()
         for topic, (low, high) in SENSORS.items():
             value = round(random.uniform(low, high), 2)
+            last_sensor_values[topic.split("/")[-1]] = value
             payload = json.dumps({"value": value, "timestamp": timestamp})
             client.publish(topic, payload)
             print(f"[PUB] {topic} → {payload}")

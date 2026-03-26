@@ -36,11 +36,10 @@ audit_log.setLevel(logging.DEBUG)
 
 OPENCLAW_URL         = os.getenv("OPENCLAW_URL",   "http://localhost:8080/v1/chat/completions")
 OPENCLAW_MODEL       = os.getenv("OPENCLAW_MODEL", "llama3.1")
-OLLAMA_URL           = os.getenv("OLLAMA_URL",     "http://localhost:11434/api/generate")
-OLLAMA_MODEL         = os.getenv("OLLAMA_MODEL",   "llama3.1")
 
 SYSTEM_PROMPT_CORE   = "system_prompt_core.txt"
 SYSTEM_PROMPT_SCHEMA = "system_prompt_schema.txt"
+OPENCLAW_POLICY_SCHEMA = "openclaw_policy_schema.json"
 KNOWLEDGE_BASE_DIR   = Path("knowledge_base/grow_maps")
 
 WINDOW_SIZE          = 60
@@ -329,11 +328,20 @@ class PromptBuilder:
         self._core = self._load_file(SYSTEM_PROMPT_CORE, "You are a hydroponics dosing policy engine.")
         self._schema = self._load_file(
             SYSTEM_PROMPT_SCHEMA,
-            "Return JSON with situation_summary, selected_control_strategy, risks, commands, recheck_interval_sec, stop_conditions.",
+            "Return JSON that strictly matches the OpenClaw policy schema.",
+        )
+        self._schema_json = self._load_file(
+            OPENCLAW_POLICY_SCHEMA,
+            '{"type":"object","additionalProperties":false}',
         )
         self._gm = grow_map
         self._kb = kb
-        log.info("Prompts loaded: core=%d chars, schema=%d chars", len(self._core), len(self._schema))
+        log.info(
+            "Prompts loaded: core=%d chars, schema=%d chars, json_schema=%d chars",
+            len(self._core),
+            len(self._schema),
+            len(self._schema_json),
+        )
 
     @staticmethod
     def _load_file(path: str, fallback: str) -> str:
@@ -374,8 +382,15 @@ class PromptBuilder:
         tray_id: str,
         actuator_state: dict[str, str],
         actuator_capabilities: dict[str, Any],
-    ) -> tuple[str, str]:
+        pending_command_acks: list[dict[str, Any]],
+    ) -> tuple[str, str, dict[str, Any]]:
         stage_targets = self._gm.get_stage_compact(crop, stage)
+        telemetry_state = control_state.get("telemetry_state", {})
+        readiness = telemetry_state.get("readiness", {})
+        available_metrics = sorted(
+            sensor for sensor, data in snapshot.items()
+            if data.get("last") is not None
+        )
         context = {
             "request_type": "CONTROL_POLICY",
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -384,16 +399,29 @@ class PromptBuilder:
             "crop": crop,
             "stage": stage,
             "growth_day": day,
-            "control_scope": ["ph", "ec"],
+            "control_scope": {
+                "automated_metrics": PROFILE.automated_metrics,
+                "observation_metrics": [m for m in self._kb.control_scope if m not in PROFILE.automated_metrics],
+            },
             "telemetry": self._telemetry(snapshot),
-            "telemetry_state": control_state.get("telemetry_state", {}),
-            "readiness": control_state.get("telemetry_state", {}).get("readiness", {}),
+            "available_metrics": available_metrics,
+            "required_metrics": {
+                "readiness_minimum": PROFILE.readiness_minimum_sensors,
+                "reasoning_inputs": {
+                    metric: PROFILE.llm_min_fresh(metric)
+                    for metric in self._kb.control_scope
+                },
+                "actuation_safety": PROFILE.telemetry_metric_roles.get("required_for_actuation_safety", []),
+            },
+            "telemetry_state": telemetry_state,
+            "readiness": readiness,
             "telemetry_profile": PROFILE.telemetry_metric_roles | {"not_onboarded": PROFILE.telemetry_not_onboarded},
             "stage_targets": {
                 "ph_range": stage_targets.get("ph_range"),
                 "ec_range": stage_targets.get("ec_range"),
             },
             "deviations": control_state.get("deviations", []),
+            "active_safety_blocks": control_state.get("blocked_metrics", {}),
             "risk_state": {
                 "risks": control_state.get("risks", []),
                 "blocked_metrics": control_state.get("blocked_metrics", {}),
@@ -403,13 +431,22 @@ class PromptBuilder:
                 "pending_effects": control_state.get("pending_effects", []),
                 "last_effect_results": control_state.get("last_effect_results", []),
             },
+            "operator_lock_conditions": control_state.get("escalations", []),
             "recent_actions": control_state.get("recent_actions", []),
+            "pending_command_acks": pending_command_acks,
             "recovery_protocol_hints": control_state.get("recovery_hints", {}),
             "general_rules": self._kb.general_rules,
             "actuator_state": actuator_state,
             "actuator_capabilities": actuator_capabilities,
         }
-        return self._core, json.dumps(context, ensure_ascii=False, indent=2) + "\n\n" + self._schema
+        user_message = (
+            json.dumps(context, ensure_ascii=False, indent=2)
+            + "\n\n"
+            + self._schema
+            + "\n\nJSON Schema:\n"
+            + self._schema_json
+        )
+        return self._core, user_message, context
 
 
 class LLMClient:
@@ -425,13 +462,8 @@ class LLMClient:
         if result is not None:
             self._failures = 0
             return result
-        log.warning("OpenClaw unavailable — Ollama fallback")
-        result = self._ollama(system_prompt, user_message)
-        if result is not None:
-            self._failures = 0
-            return result
         self._failures += 1
-        log.error("Both LLM backends failed. streak=%d/%d", self._failures, DEAD_MAN_THRESHOLD)
+        log.error("OpenClaw unavailable or invalid. streak=%d/%d", self._failures, DEAD_MAN_THRESHOLD)
         return None
 
     def _openclaw(self, system_prompt: str, user_message: str) -> Optional[str]:
@@ -456,28 +488,6 @@ class LLMClient:
             return None
         except Exception as exc:
             log.debug("OpenClaw error: %s", exc)
-            return None
-
-    def _ollama(self, system_prompt: str, user_message: str) -> Optional[str]:
-        payload = {
-            "model":  OLLAMA_MODEL,
-            "prompt": f"{system_prompt}\n\n{user_message}",
-            "format": "json",
-            "stream": False,
-        }
-        try:
-            resp = requests.post(OLLAMA_URL, json=payload, timeout=LLM_TIMEOUT_SEC)
-            resp.raise_for_status()
-            text = resp.json().get("response", "").strip()
-            if not text: return None
-            log.info("Ollama fallback OK (%d chars)", len(text))
-            audit_log.info("OLLAMA_FALLBACK_OK | model=%s | chars=%d", OLLAMA_MODEL, len(text))
-            return text
-        except requests.exceptions.ConnectionError:
-            log.error("Ollama not available at %s", OLLAMA_URL)
-            return None
-        except Exception as exc:
-            log.error("Ollama error: %s", exc)
             return None
 
 class SmartMQTTBridge:
@@ -889,7 +899,7 @@ class SmartMQTTBridge:
             snapshot = context["snapshot"]
             stage_targets = context["stage_targets"]
             control_state = context["control_state"]
-            sys_p, user_m = self._prompt_builder.build_control(
+            sys_p, user_m, structured_context = self._prompt_builder.build_control(
                 snapshot,
                 control_state,
                 CURRENT_CROP,
@@ -898,12 +908,23 @@ class SmartMQTTBridge:
                 TRAY_ID,
                 self._active_actuators,
                 self._control.actuator_capabilities(),
+                self._gateway.pending_commands_snapshot(),
             )
 
             audit_log.info(
                 "LLM_REQUEST | type=%s | crop=%s | stage=%s | day=%d | sys=%d | user=%d",
                 request_type, CURRENT_CROP, CURRENT_GROWTH_STAGE, CURRENT_GROWTH_DAY,
                 len(sys_p), len(user_m),
+            )
+            db.save_control_event(
+                "llm_context",
+                "smart_bridge",
+                status="prepared",
+                details=(
+                    f"reasoning_metrics={control_state.get('reasoning_metrics', [])} "
+                    f"readiness={structured_context.get('readiness', {}).get('state')}"
+                )[:500],
+                context_json=json.dumps(structured_context, ensure_ascii=False),
             )
 
             raw = self._llm.generate(sys_p, user_m)
@@ -918,7 +939,7 @@ class SmartMQTTBridge:
                     "llm_result",
                     "smart_bridge",
                     status="unavailable",
-                    details=f"failures={self._llm.consecutive_failures}",
+                    details=f"openclaw_failures={self._llm.consecutive_failures}",
                 )
                 if self._llm.consecutive_failures >= DEAD_MAN_THRESHOLD:
                     log.critical("Dead man's switch triggered — fallback rules")
@@ -938,6 +959,7 @@ class SmartMQTTBridge:
                 "smart_bridge",
                 status="received",
                 details=f"chars={len(raw)}",
+                context_json=raw[:4000],
             )
             self._gateway.process(raw, snapshot, request_type)
 
@@ -973,7 +995,7 @@ class SmartMQTTBridge:
             log.warning("Partial telemetry profile enabled: optional/not-onboarded metrics may be absent without failure")
         log.info("crop=%s  stage=%s  day=%d  tray=%s",
                  CURRENT_CROP, CURRENT_GROWTH_STAGE, CURRENT_GROWTH_DAY, TRAY_ID)
-        log.info("OpenClaw: %s  Ollama fallback: %s", OPENCLAW_URL, OLLAMA_URL)
+        log.info("OpenClaw: %s", OPENCLAW_URL)
         log.info("InfluxDB: %s  bucket=%s", influx.INFLUX_URL, influx.INFLUX_BUCKET)
         log.info("Dry-run mode: %s", DRY_RUN)
         log.info("Operator reset topic: %s", OPERATOR_RESET_TOPIC)
