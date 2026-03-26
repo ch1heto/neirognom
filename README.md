@@ -226,11 +226,20 @@ Key `control_events` emitted by the bridge stack:
 
 ## Local Windows Run Order
 
+Environment defaults for local testing:
+
+```powershell
+$env:AI_BACKEND='openclaw'
+$env:OPENCLAW_URL='http://127.0.0.1:18789'
+```
+
 1. Start a local MQTT broker.
 2. Start the bridge:
 
 ```powershell
 $env:APP_PROFILE='test'
+$env:AI_BACKEND='openclaw'
+$env:OPENCLAW_URL='http://127.0.0.1:18789'
 $env:TRAY_ID='tray01'
 $env:MQTT_HOST='localhost'
 $env:MQTT_PORT='1883'

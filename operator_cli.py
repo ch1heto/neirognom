@@ -6,8 +6,11 @@ import os
 from datetime import datetime, timezone
 
 import paho.mqtt.publish as mqtt_publish
+from dotenv import load_dotenv
 
 import database as db
+
+load_dotenv()
 
 
 DEFAULT_HOST = os.getenv("MQTT_HOST", "localhost")

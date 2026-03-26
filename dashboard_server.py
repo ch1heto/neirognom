@@ -7,7 +7,11 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from dotenv import load_dotenv
+
 import database as db
+
+load_dotenv()
 
 
 HOST = os.getenv("DASHBOARD_HOST", "127.0.0.1")

@@ -13,12 +13,15 @@ from typing import Any, Optional
 
 import paho.mqtt.client as mqtt
 import requests
+from dotenv import load_dotenv
 
 from command_gateway import HybridCommandGateway
 from control_config import KnowledgeBaseConfig, load_runtime_profile
 from control_runtime import ControlSafetyManager
 import database as db
 import influx_writer as influx
+
+load_dotenv()
 
 PROFILE = load_runtime_profile()
 
@@ -34,7 +37,9 @@ _ah.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
 audit_log.addHandler(_ah)
 audit_log.setLevel(logging.DEBUG)
 
-OPENCLAW_URL         = os.getenv("OPENCLAW_URL",   "http://localhost:8080/v1/chat/completions")
+DEFAULT_OPENCLAW_URL = "http://127.0.0.1:18789"
+AI_BACKEND           = os.getenv("AI_BACKEND", "openclaw").strip().lower() or "openclaw"
+OPENCLAW_URL         = os.getenv("OPENCLAW_URL", DEFAULT_OPENCLAW_URL).strip().rstrip("/")
 OPENCLAW_MODEL       = os.getenv("OPENCLAW_MODEL", "llama3.1")
 
 SYSTEM_PROMPT_CORE   = "system_prompt_core.txt"
@@ -995,7 +1000,9 @@ class SmartMQTTBridge:
             log.warning("Partial telemetry profile enabled: optional/not-onboarded metrics may be absent without failure")
         log.info("crop=%s  stage=%s  day=%d  tray=%s",
                  CURRENT_CROP, CURRENT_GROWTH_STAGE, CURRENT_GROWTH_DAY, TRAY_ID)
-        log.info("OpenClaw: %s", OPENCLAW_URL)
+        if AI_BACKEND != "openclaw":
+            log.warning("AI_BACKEND=%s is not supported in the active control path; forcing OpenClaw policy path", AI_BACKEND)
+        log.info("Resolved OpenClaw URL: %s", OPENCLAW_URL)
         log.info("InfluxDB: %s  bucket=%s", influx.INFLUX_URL, influx.INFLUX_BUCKET)
         log.info("Dry-run mode: %s", DRY_RUN)
         log.info("Operator reset topic: %s", OPERATOR_RESET_TOPIC)
