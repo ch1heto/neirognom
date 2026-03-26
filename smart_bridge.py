@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 import paho.mqtt.client as mqtt
-import requests
 from dotenv import load_dotenv
 
 from command_gateway import HybridCommandGateway
@@ -20,6 +19,7 @@ from control_config import KnowledgeBaseConfig, load_runtime_profile
 from control_runtime import ControlSafetyManager
 import database as db
 import influx_writer as influx
+from openclaw_client import resolve_transport, send_policy_request
 
 load_dotenv()
 
@@ -39,6 +39,7 @@ audit_log.setLevel(logging.DEBUG)
 
 DEFAULT_OPENCLAW_URL = "http://127.0.0.1:18789"
 AI_BACKEND           = os.getenv("AI_BACKEND", "openclaw").strip().lower() or "openclaw"
+OPENCLAW_TRANSPORT   = os.getenv("OPENCLAW_TRANSPORT", "auto").strip().lower() or "auto"
 OPENCLAW_URL         = os.getenv("OPENCLAW_URL", DEFAULT_OPENCLAW_URL).strip().rstrip("/")
 OPENCLAW_MODEL       = os.getenv("OPENCLAW_MODEL", "llama3.1")
 
@@ -472,28 +473,40 @@ class LLMClient:
         return None
 
     def _openclaw(self, system_prompt: str, user_message: str) -> Optional[str]:
-        payload = {
-            "model": OPENCLAW_MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_message},
-            ],
-            "temperature": 0.1,
-            "response_format": {"type": "json_object"},
-        }
-        try:
-            resp = requests.post(OPENCLAW_URL, json=payload, timeout=LLM_TIMEOUT_SEC)
-            resp.raise_for_status()
-            text = resp.json()["choices"][0]["message"]["content"].strip()
-            log.info("OpenClaw OK (%d chars)", len(text))
-            audit_log.info("OPENCLAW_OK | model=%s | chars=%d", OPENCLAW_MODEL, len(text))
-            return text
-        except requests.exceptions.ConnectionError:
-            log.debug("OpenClaw not available at %s", OPENCLAW_URL)
+        roundtrip = send_policy_request(
+            raw_url=OPENCLAW_URL,
+            model=OPENCLAW_MODEL,
+            system_prompt=system_prompt,
+            user_message=user_message,
+            timeout_sec=LLM_TIMEOUT_SEC,
+            logger=log,
+            transport_mode=OPENCLAW_TRANSPORT,
+        )
+        if not roundtrip.ok or not roundtrip.response_text:
+            log.error(
+                "OpenClaw transport failure | transport=%s endpoint=%s error=%s preview=%s",
+                roundtrip.transport,
+                roundtrip.endpoint,
+                roundtrip.error or "-",
+                roundtrip.response_preview or "-",
+            )
             return None
-        except Exception as exc:
-            log.debug("OpenClaw error: %s", exc)
-            return None
+
+        log.info(
+            "OpenClaw response received | transport=%s endpoint=%s status=%s preview=%s",
+            roundtrip.transport,
+            roundtrip.endpoint,
+            roundtrip.status_code if roundtrip.status_code is not None else "-",
+            roundtrip.response_preview or "-",
+        )
+        audit_log.info(
+            "OPENCLAW_OK | transport=%s | endpoint=%s | model=%s | chars=%d",
+            roundtrip.transport,
+            roundtrip.endpoint,
+            OPENCLAW_MODEL,
+            len(roundtrip.response_text),
+        )
+        return roundtrip.response_text
 
 class SmartMQTTBridge:
     def __init__(self) -> None:
@@ -1002,7 +1015,13 @@ class SmartMQTTBridge:
                  CURRENT_CROP, CURRENT_GROWTH_STAGE, CURRENT_GROWTH_DAY, TRAY_ID)
         if AI_BACKEND != "openclaw":
             log.warning("AI_BACKEND=%s is not supported in the active control path; forcing OpenClaw policy path", AI_BACKEND)
-        log.info("Resolved OpenClaw URL: %s", OPENCLAW_URL)
+        resolved_transport, resolved_endpoint = resolve_transport(OPENCLAW_URL, transport_mode=OPENCLAW_TRANSPORT)
+        log.info(
+            "Resolved OpenClaw endpoint: requested=%s transport=%s endpoint=%s",
+            OPENCLAW_URL,
+            resolved_transport,
+            resolved_endpoint,
+        )
         log.info("InfluxDB: %s  bucket=%s", influx.INFLUX_URL, influx.INFLUX_BUCKET)
         log.info("Dry-run mode: %s", DRY_RUN)
         log.info("Operator reset topic: %s", OPERATOR_RESET_TOPIC)

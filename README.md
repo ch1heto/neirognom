@@ -231,6 +231,7 @@ Environment defaults for local testing:
 ```powershell
 $env:AI_BACKEND='openclaw'
 $env:OPENCLAW_URL='http://127.0.0.1:18789'
+$env:OPENCLAW_TRANSPORT='auto'
 ```
 
 1. Start a local MQTT broker.
@@ -240,6 +241,7 @@ $env:OPENCLAW_URL='http://127.0.0.1:18789'
 $env:APP_PROFILE='test'
 $env:AI_BACKEND='openclaw'
 $env:OPENCLAW_URL='http://127.0.0.1:18789'
+$env:OPENCLAW_TRANSPORT='auto'
 $env:TRAY_ID='tray01'
 $env:MQTT_HOST='localhost'
 $env:MQTT_PORT='1883'

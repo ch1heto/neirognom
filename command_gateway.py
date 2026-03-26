@@ -368,7 +368,14 @@ class HybridCommandGateway:
             log.error("OpenClaw response must be a JSON object")
             return None
         try:
-            return ParsedPolicy.model_validate(data)
+            parsed = ParsedPolicy.model_validate(data)
+            log.info(
+                "OpenClaw policy parse success | risk=%s commands=%d strategy=%s",
+                parsed.risk_level,
+                len(parsed.recommended_commands),
+                parsed.selected_strategy[:120],
+            )
+            return parsed
         except ValidationError as exc:
             log.error("OpenClaw policy schema validation failed: %s", exc)
             return None

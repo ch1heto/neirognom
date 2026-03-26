@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 import socket
 import zipfile
@@ -14,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 from dotenv import load_dotenv
 
 import database as db
+from openclaw_client import healthcheck as openclaw_healthcheck, resolve_transport
 
 load_dotenv()
 
@@ -25,6 +27,7 @@ INDEX_PATH = ROOT / "dashboard.html"
 OPENCLAW_URL = os.getenv("OPENCLAW_URL", "http://127.0.0.1:18789").strip()
 AI_BACKEND = os.getenv("AI_BACKEND", "openclaw").strip().lower() or "openclaw"
 OPENCLAW_MODEL = os.getenv("OPENCLAW_MODEL", "llama3.1").strip() or "llama3.1"
+OPENCLAW_TRANSPORT = os.getenv("OPENCLAW_TRANSPORT", "auto").strip().lower() or "auto"
 
 
 def _json_response(handler: SimpleHTTPRequestHandler, payload: dict, status: int = HTTPStatus.OK) -> None:
@@ -134,11 +137,14 @@ def _recent_bridge_statuses(limit: int = 20) -> list[dict]:
 
 def _openclaw_diagnostics() -> dict:
     parsed = urlparse(OPENCLAW_URL)
+    resolved_transport, resolved_endpoint = resolve_transport(OPENCLAW_URL, transport_mode=OPENCLAW_TRANSPORT)
     host = parsed.hostname or ""
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     result = {
         "ai_backend": AI_BACKEND,
         "resolved_openclaw_url": OPENCLAW_URL,
+        "resolved_transport": resolved_transport,
+        "resolved_endpoint": resolved_endpoint,
         "model": OPENCLAW_MODEL,
         "scheme": parsed.scheme or "http",
         "host": host,
@@ -146,6 +152,10 @@ def _openclaw_diagnostics() -> dict:
         "path": parsed.path or "/",
         "tcp_connect_ok": False,
         "tcp_error": "",
+        "roundtrip_ok": False,
+        "roundtrip_error": "",
+        "roundtrip_response_preview": "",
+        "roundtrip_status_code": None,
         "checked_at_utc": datetime.now(timezone.utc).isoformat(),
     }
     if not host:
@@ -157,6 +167,18 @@ def _openclaw_diagnostics() -> dict:
             result["tcp_connect_ok"] = True
     except OSError as exc:
         result["tcp_error"] = str(exc)
+
+    health = openclaw_healthcheck(
+        raw_url=OPENCLAW_URL,
+        model=OPENCLAW_MODEL,
+        timeout_sec=8,
+        logger=logging.getLogger("dashboard_openclaw"),
+        transport_mode=OPENCLAW_TRANSPORT,
+    )
+    result["roundtrip_ok"] = bool(health.get("ok"))
+    result["roundtrip_error"] = str(health.get("error") or "")
+    result["roundtrip_response_preview"] = str(health.get("response_preview") or "")
+    result["roundtrip_status_code"] = health.get("status_code")
     return result
 
 
@@ -325,6 +347,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             params = parse_qs(parsed.query)
             limit = int(params.get("limit", ["80"])[0])
             _json_response(self, _load_events_payload(limit))
+            return
+        if parsed.path == "/api/openclaw/diagnostics":
+            _json_response(self, _openclaw_diagnostics())
             return
         if parsed.path == "/download/diagnostic-bundle":
             body, archive_name = _build_diagnostic_bundle()
