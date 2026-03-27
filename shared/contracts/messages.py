@@ -7,14 +7,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class CommandLifecycle(StrEnum):
-    QUEUED = "queued"
-    SENT = "sent"
-    ACKED = "acked"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    EXPIRED = "expired"
-    REJECTED_BY_SAFETY = "rejected_by_safety"
+    PLANNED = "PLANNED"
+    DISPATCHED = "DISPATCHED"
+    ACKED = "ACKED"
+    EXECUTING = "EXECUTING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    EXPIRED = "EXPIRED"
+    ABORTED = "ABORTED"
 
 
 class DeviceConnectivity(StrEnum):
@@ -28,6 +28,7 @@ class DecisionOrigin(StrEnum):
     DETERMINISTIC = "deterministic"
     LLAMA = "llama"
     OPERATOR = "operator"
+    AUTOMATION = "automation"
 
 
 class StrictModel(BaseModel):
@@ -56,19 +57,19 @@ class DeviceStateMessage(StrictModel):
     state: dict[str, Any] = Field(default_factory=dict)
 
 
-class CommandRequest(StrictModel):
-    command_id: str = Field(min_length=8, max_length=128)
+class ActuatorCommandMessage(StrictModel):
+    message_id: str = Field(min_length=8, max_length=128)
     trace_id: str = Field(min_length=8, max_length=128)
+    command_id: str = Field(min_length=8, max_length=128)
+    execution_id: str = Field(min_length=8, max_length=128)
     device_id: str = Field(min_length=1, max_length=64)
     zone_id: str = Field(min_length=1, max_length=64)
     actuator: str = Field(min_length=1, max_length=64)
     action: str = Field(min_length=1, max_length=64)
+    step: str = Field(min_length=1, max_length=64)
     created_at_ms: int = Field(ge=0)
     expires_at_ms: int = Field(ge=0)
     max_duration_ms: int = Field(ge=0)
-    idempotency_key: str = Field(min_length=8, max_length=128)
-    origin: DecisionOrigin
-    reason: str = ""
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -76,6 +77,8 @@ class CommandAck(StrictModel):
     message_id: str = Field(min_length=8, max_length=128)
     trace_id: str = Field(min_length=8, max_length=128)
     command_id: str = Field(min_length=8, max_length=128)
+    execution_id: str | None = Field(default=None, min_length=8, max_length=128)
+    step: str | None = None
     device_id: str = Field(min_length=1, max_length=64)
     zone_id: str = Field(min_length=1, max_length=64)
     state: Literal["queued", "received", "acked", "running", "failed", "expired"]
@@ -87,9 +90,11 @@ class CommandResult(StrictModel):
     message_id: str = Field(min_length=8, max_length=128)
     trace_id: str = Field(min_length=8, max_length=128)
     command_id: str = Field(min_length=8, max_length=128)
+    execution_id: str | None = Field(default=None, min_length=8, max_length=128)
+    step: str | None = None
     device_id: str = Field(min_length=1, max_length=64)
     zone_id: str = Field(min_length=1, max_length=64)
-    final_state: Literal["completed", "failed", "expired"]
+    final_state: Literal["completed", "failed", "expired", "aborted"]
     result_at_ms: int = Field(ge=0)
     metrics: dict[str, Any] = Field(default_factory=dict)
     details: str = ""

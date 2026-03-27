@@ -4,36 +4,34 @@ import time
 
 from backend.dispatcher.service import CommandDispatcher
 from backend.safety.validator import ActionProposal
+from backend.state.influx import TelemetryHistoryStore
 from backend.state.store import StateStore
 from shared.contracts.messages import DecisionOrigin
 
 
 class BackendToolService:
-    def __init__(self, store: StateStore, dispatcher: CommandDispatcher) -> None:
-        self._store = store
+    def __init__(self, state_store: StateStore, telemetry_history: TelemetryHistoryStore, dispatcher: CommandDispatcher) -> None:
+        self._state_store = state_store
+        self._telemetry_history = telemetry_history
         self._dispatcher = dispatcher
 
     def get_current_state(self) -> dict:
-        return self._store.get_current_state()
+        return self._state_store.get_current_state()
 
     def get_zone_state(self, zone_id: str) -> dict:
-        return self._store.get_zone_state(zone_id)
+        return self._state_store.get_zone_state(zone_id)
 
     def get_sensor_history(self, device_id: str, sensor: str, start_ms: int, end_ms: int, limit: int = 500) -> list[dict]:
-        return self._store.get_sensor_history(device_id, sensor, start_ms, end_ms, limit=limit)
+        return self._telemetry_history.get_sensor_history(device_id, sensor, start_ms, end_ms, limit=limit)
 
     def get_active_alerts(self) -> list[dict]:
-        return self._store.get_active_alerts()
+        return self._state_store.get_active_alarms()
 
     def get_command_status(self, command_id: str) -> dict | None:
-        return self._store.get_command_status(command_id)
+        return self._state_store.get_command_status(command_id)
 
     def propose_action(self, action: dict) -> dict:
-        return {
-            "status": "proposal_only",
-            "action": action,
-            "note": "proposal captured; execute_manual_action still passes through backend safety path",
-        }
+        return {"status": "proposal_only", "action": action, "note": "use execute_manual_action to pass through backend validation and execution"}
 
     def execute_manual_action(self, action: dict) -> dict:
         proposal = ActionProposal(
@@ -46,6 +44,7 @@ class BackendToolService:
             origin=DecisionOrigin.OPERATOR,
             reason=str(action.get("reason", "manual operator action")),
             requested_at_ms=int(action.get("requested_at_ms", int(time.time() * 1000))),
+            command_id=action.get("command_id"),
             metadata=dict(action.get("metadata", {})),
         )
         return self._dispatcher.dispatch_proposal(proposal)

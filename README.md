@@ -1,112 +1,139 @@
-# Greenhouse Backend-Centric Architecture
+# Greenhouse Backend Execution Architecture
 
-This repository now targets a backend-centric greenhouse control runtime.
+This repository now targets a backend-centric greenhouse runtime with a strict execution safety boundary.
 
-## Target runtime path
+## Runtime path
 
-- `ESP32` is edge only: sensors, actuators, local watchdogs, safe mode.
+- `ESP32` stays edge-only: sensors, actuators, watchdogs, safe mode.
 - `MQTT` is transport only.
-- `Backend` is the single source of truth and final safety gate.
-- `Llama 3.1` is a reasoning engine used only by backend.
-- `OpenClaw` is an external MCP/operator layer that talks to backend tools and never touches devices directly.
+- `SQLite` is the operational/control database and single source of truth.
+- `InfluxDB` stores telemetry history and trend queries only.
+- `Backend` owns state, decisions, safety validation, orchestration, dispatch, recovery.
+- `Llama 3.1` provides recommendations only.
+- `OpenClaw` is an operator/MCP client to backend tools and never publishes hardware commands directly.
 
 ## Package map
 
 - `shared/contracts/messages.py`
-  - strict DTOs for telemetry, state, commands, LLM recommendations, safety decisions, alerts
-- `mqtt/topics.py`
-  - canonical MQTT topic builder/parser
+  - strict MQTT/API DTOs
+- `backend/domain/models.py`
+  - `Device`, `TrayZone`, `Command`, `CommandExecution`, `SafetyLock`, `ManualLease`, `Alarm`, `AuditLog`, `AutomationFlag`
 - `backend/config.py`
-  - runtime config for MQTT, PostgreSQL/sqlite compatibility, zones, Llama, OpenClaw operator settings
+  - MQTT, SQLite, InfluxDB, Llama, OpenClaw, zone/global safety config
 - `backend/state/store.py`
-  - state store abstraction
-  - `PostgresStateStore` is the target backend
-  - `SQLiteCompatibilityStateStore` is a deprecated migration adapter
+  - SQLite operational store and memory test store
+- `backend/state/influx.py`
+  - Influx telemetry writer/query boundary
 - `backend/decision_engine/engine.py`
-  - deterministic rules first, Llama only as fallback recommendation source
+  - deterministic rules first, Llama fallback second
 - `backend/safety/validator.py`
   - final backend safety gate
+- `backend/execution/orchestrator.py`
+  - irrigation sequencing, safe stop, TTL, restart recovery
 - `backend/dispatcher/service.py`
-  - command state machine and MQTT dispatch
+  - orchestration-facing dispatch facade
 - `backend/ingestion/service.py`
-  - MQTT ingestion, validation, dedup, routing
+  - MQTT ingestion, validation, dedup, normalization
 - `backend/api/tools.py`
-  - backend tool/API surface for operators
+  - operator/OpenClaw tool layer
 - `integrations/llama/client.py`
-  - local Llama API client
+  - local Llama API adapter
 - `integrations/openclaw_mcp/tools.py`
-  - OpenClaw operator adapter to backend tools
+  - OpenClaw MCP adapter
 - `backend/runtime.py`
   - canonical runtime wiring
 - `backend_server.py`
   - canonical entrypoint
 - `smart_bridge.py`
-  - deprecated compatibility adapter that delegates to backend runtime
+  - deprecated adapter to the new backend runtime
+
+## Core entities
+
+- `Device`
+- `TrayZone`
+- `Command`
+- `CommandExecution`
+- `SafetyLock`
+- `ManualLease`
+- `Alarm`
+- `AuditLog`
+
+Command lifecycle:
+
+- `PLANNED`
+- `DISPATCHED`
+- `ACKED`
+- `EXECUTING`
+- `COMPLETED`
+- `FAILED`
+- `EXPIRED`
+- `ABORTED`
 
 ## Data flow
 
-1. Edge publishes `greenhouse/device/{device_id}/telemetry/raw` or `.../state`.
-2. `backend.ingestion.service.IngestionService` validates and deduplicates payloads.
-3. `backend.state.store` updates current state and telemetry history.
-4. `backend.decision_engine.engine.DecisionEngine` applies deterministic rules.
-5. Only if deterministic rules do not fully answer, backend asks `integrations.llama.client.LlamaDecisionClient`.
-6. Backend converts any recommendation into `ActionProposal`.
-7. `backend.safety.validator.SafetyValidator` performs final validation.
-8. `backend.dispatcher.service.CommandDispatcher` creates `CommandRequest`, publishes MQTT, and manages lifecycle:
-   - `queued`
-   - `sent`
-   - `acked`
-   - `running`
-   - `completed`
-   - `failed`
-   - `expired`
-   - `rejected_by_safety`
-9. ACK/RESULT topics update command lifecycle back into the state store.
-10. OpenClaw, if used, consumes backend tools only:
-   - `get_current_state`
-   - `get_zone_state`
-   - `get_sensor_history`
-   - `get_active_alerts`
-   - `propose_action`
-   - `execute_manual_action`
-   - `get_command_status`
+1. Edge publishes telemetry/state over MQTT.
+2. `IngestionService` validates JSON, deduplicates by `message_id`, updates SQLite current state, writes telemetry history to InfluxDB.
+3. `DecisionEngine` applies deterministic rules.
+4. If rules are insufficient, backend asks Llama for a JSON recommendation.
+5. `SafetyValidator` checks locks, leases, cooldowns, source availability, leaks, overflow, run quotas, global limits.
+6. `IrrigationOrchestrator` creates `Command` + `CommandExecution`, reserves the zone, and sequences:
+   - validate request
+   - reserve zone
+   - open valve
+   - wait settle delay
+   - start pump
+   - confirm flow
+   - monitor duration / volume / anomalies
+   - stop pump
+   - close valve
+   - verify safe stop
+   - persist final result
+7. ACK/RESULT messages update execution state in SQLite.
+8. On backend restart, active executions are restored from SQLite and reconciled before continuing or safely aborting.
 
-## MQTT contracts
+## SQLite control boundary
 
-- `greenhouse/device/{device_id}/telemetry/raw`
-- `greenhouse/device/{device_id}/state`
-- `greenhouse/device/{device_id}/cmd/execute`
-- `greenhouse/device/{device_id}/cmd/ack`
-- `greenhouse/device/{device_id}/cmd/result`
-- `greenhouse/device/{device_id}/event/error`
+SQLite stores:
 
-QoS recommendation: `1` for all runtime messages in this repository.
+- current device/zone state
+- command records
+- command execution records
+- safety locks
+- manual leases
+- automation flags
+- active alarms
+- audit logs
+- processed message ids
 
-## Safety model
+## InfluxDB boundary
 
-Per-zone:
-- cooldown
-- max duration per run
-- max runs per hour
-- max total water per day
-- blocked flag
-- last watering timestamp
-- last error timestamp
+InfluxDB stores only:
 
-Global:
-- max simultaneous zones
-- emergency stop
-- master pump timeout
-- flow limit window
-- leak shutdown
+- sensor history
+- flow history
+- environmental trends
+- telemetry lookback queries for reasoning/analytics
+
+It is not used for command state, safety locks, leases, alarms, or execution recovery.
+
+## Safety guarantees
+
+- No LLM/OpenClaw/UI path sends actuator commands directly.
+- All manual actions go through backend validation and orchestration.
+- Command idempotency is keyed by `command_id`.
+- Commands support `expires_at_ms`.
+- Dangerous actions are audit logged.
 
 ## Environment
 
-See [.env.example](/V:/work/DIPLOM/testMoskitto/.env.example).
+See `.env.example`.
 
 Key variables:
-- `STATE_STORE_BACKEND=postgres|sqlite_compat|memory`
-- `POSTGRES_DSN`
+
+- `STATE_STORE_BACKEND=sqlite|memory`
+- `SQLITE_PATH`
+- `TELEMETRY_HISTORY_BACKEND=influx|memory`
+- `INFLUX_URL`, `INFLUX_ORG`, `INFLUX_BUCKET`, `INFLUX_TOKEN`
 - `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`
 - `ZONE_IDS`
 - `LLAMA_API_URL`, `LLAMA_MODEL`
@@ -118,21 +145,14 @@ Key variables:
 .\venv\Scripts\python.exe .\backend_server.py
 ```
 
-The old entrypoint still exists:
+Legacy entrypoint:
 
 ```powershell
 .\venv\Scripts\python.exe .\smart_bridge.py
 ```
 
-but it only forwards to the new backend runtime and should be treated as deprecated.
-
 ## Migration notes
 
-- The old OpenClaw-central path is no longer the primary runtime path.
-- `openclaw_client.py`, `command_gateway.py`, `control_runtime.py`, and the old SQLite audit flow are legacy artifacts until the remaining UI/diagnostic surfaces are migrated.
-- Production deployment should use:
-  - Ubuntu
-  - Mosquitto
-  - PostgreSQL
-  - local Llama runtime
-  - OpenClaw as an external operator client
+- Old `PostgreSQL`/`sqlite_compat` assumptions are removed from the runtime path.
+- Existing OpenClaw-specific modules remain deprecated compatibility artifacts only.
+- If older code still expects direct actuator dispatch, route it through `BackendToolService.execute_manual_action()` or the dispatcher facade instead.

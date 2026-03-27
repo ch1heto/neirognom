@@ -13,6 +13,7 @@ from backend.dispatcher.service import CommandDispatcher
 from backend.ingestion.service import IngestionService
 from backend.logging_utils import configure_logging
 from backend.safety.validator import SafetyValidator
+from backend.state.influx import build_telemetry_history_store
 from backend.state.store import build_state_store
 from integrations.llama.client import LlamaDecisionClient
 from integrations.openclaw_mcp.tools import OpenClawMcpAdapter
@@ -27,8 +28,9 @@ class BackendRuntime:
         self.config = load_backend_config()
         configure_logging()
 
-        self.store = build_state_store(self.config.database)
-        self.store.initialize(self.config.zone_configs(), self.config.global_safety)
+        self.state_store = build_state_store(self.config.sqlite, self.config.state_store_backend)
+        self.state_store.initialize(self.config.zone_configs(), self.config.global_safety)
+        self.telemetry_history = build_telemetry_history_store(self.config.influx, self.config.telemetry_history_backend)
 
         self.mqtt = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=self.config.mqtt.client_id)
         if self.config.mqtt.username:
@@ -36,10 +38,10 @@ class BackendRuntime:
 
         self.safety = SafetyValidator(self.config)
         self.llama = LlamaDecisionClient(self.config.llama)
-        self.decision_engine = DecisionEngine(self.config, self.store, self.llama)
-        self.dispatcher = CommandDispatcher(self.mqtt, self.config, self.store, self.safety)
-        self.ingestion = IngestionService(self.store, self.decision_engine, self.dispatcher)
-        self.backend_tools = BackendToolService(self.store, self.dispatcher)
+        self.decision_engine = DecisionEngine(self.config, self.state_store, self.telemetry_history, self.llama)
+        self.dispatcher = CommandDispatcher(self.mqtt, self.config, self.state_store, self.safety)
+        self.ingestion = IngestionService(self.state_store, self.telemetry_history, self.decision_engine, self.dispatcher)
+        self.backend_tools = BackendToolService(self.state_store, self.telemetry_history, self.dispatcher)
         self.openclaw_adapter = OpenClawMcpAdapter(self.backend_tools)
 
         self.mqtt.on_connect = self._on_connect
@@ -56,6 +58,7 @@ class BackendRuntime:
         ]
         for topic, qos in subscriptions:
             client.subscribe(topic, qos=qos)
+        self.dispatcher.recover_active_executions()
         log.info("backend mqtt connected host=%s port=%s reason_code=%s", self.config.mqtt.host, self.config.mqtt.port, reason_code)
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties) -> None:
@@ -66,10 +69,11 @@ class BackendRuntime:
 
     def run(self) -> None:
         log.info(
-            "backend startup mqtt=%s:%d db_backend=%s llama=%s openclaw_operator_enabled=%s zones=%s",
+            "backend startup mqtt=%s:%d sqlite=%s influx_enabled=%s llama=%s openclaw_operator_enabled=%s zones=%s",
             self.config.mqtt.host,
             self.config.mqtt.port,
-            self.config.database.backend,
+            self.config.sqlite.path,
+            self.config.influx.enabled,
             self.config.llama.api_url,
             self.config.openclaw.enabled,
             ",".join(self.config.zone_ids),
@@ -78,7 +82,7 @@ class BackendRuntime:
         self.mqtt.loop_start()
         try:
             while True:
-                self.dispatcher.sweep_expired()
+                self.dispatcher.sweep()
                 time.sleep(1)
         except KeyboardInterrupt:
             log.info("backend shutdown requested")
