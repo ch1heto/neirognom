@@ -19,7 +19,7 @@ from control_config import KnowledgeBaseConfig, load_runtime_profile
 from control_runtime import ControlSafetyManager
 import database as db
 import influx_writer as influx
-from openclaw_client import resolve_transport, send_policy_request
+from openclaw_client import OpenClawProvider, load_runtime_config
 
 load_dotenv()
 
@@ -37,11 +37,11 @@ _ah.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
 audit_log.addHandler(_ah)
 audit_log.setLevel(logging.DEBUG)
 
-DEFAULT_OPENCLAW_URL = "http://127.0.0.1:18789"
-AI_BACKEND           = os.getenv("AI_BACKEND", "openclaw").strip().lower() or "openclaw"
-OPENCLAW_TRANSPORT   = os.getenv("OPENCLAW_TRANSPORT", "auto").strip().lower() or "auto"
-OPENCLAW_URL         = os.getenv("OPENCLAW_URL", DEFAULT_OPENCLAW_URL).strip().rstrip("/")
-OPENCLAW_MODEL       = os.getenv("OPENCLAW_MODEL", "llama3.1")
+OPENCLAW_CONFIG      = load_runtime_config()
+AI_BACKEND           = OPENCLAW_CONFIG.ai_backend
+OPENCLAW_TRANSPORT   = OPENCLAW_CONFIG.requested_transport
+OPENCLAW_URL         = OPENCLAW_CONFIG.raw_url
+OPENCLAW_MODEL       = OPENCLAW_CONFIG.model
 
 SYSTEM_PROMPT_CORE   = "system_prompt_core.txt"
 SYSTEM_PROMPT_SCHEMA = "system_prompt_schema.txt"
@@ -456,12 +456,16 @@ class PromptBuilder:
 
 
 class LLMClient:
-    def __init__(self) -> None:
+    def __init__(self, provider: OpenClawProvider) -> None:
         self._failures = 0
+        self._provider = provider
 
     @property
     def consecutive_failures(self) -> int:
         return self._failures
+
+    def log_provider_startup(self) -> None:
+        self._provider.log_startup()
 
     def generate(self, system_prompt: str, user_message: str) -> Optional[str]:
         result = self._openclaw(system_prompt, user_message)
@@ -473,20 +477,18 @@ class LLMClient:
         return None
 
     def _openclaw(self, system_prompt: str, user_message: str) -> Optional[str]:
-        roundtrip = send_policy_request(
-            raw_url=OPENCLAW_URL,
-            model=OPENCLAW_MODEL,
+        roundtrip = self._provider.request(
             system_prompt=system_prompt,
             user_message=user_message,
             timeout_sec=LLM_TIMEOUT_SEC,
-            logger=log,
-            transport_mode=OPENCLAW_TRANSPORT,
         )
         if not roundtrip.ok or not roundtrip.response_text:
             log.error(
-                "OpenClaw transport failure | transport=%s endpoint=%s error=%s preview=%s",
+                "OpenClaw transport failure | backend=%s transport=%s endpoint=%s exception_type=%s error=%s preview=%s",
+                self._provider.config.ai_backend,
                 roundtrip.transport,
                 roundtrip.endpoint,
+                roundtrip.exception_type or "-",
                 roundtrip.error or "-",
                 roundtrip.response_preview or "-",
             )
@@ -503,7 +505,7 @@ class LLMClient:
             "OPENCLAW_OK | transport=%s | endpoint=%s | model=%s | chars=%d",
             roundtrip.transport,
             roundtrip.endpoint,
-            OPENCLAW_MODEL,
+            self._provider.config.model,
             len(roundtrip.response_text),
         )
         return roundtrip.response_text
@@ -518,7 +520,7 @@ class SmartMQTTBridge:
         self._grow_map       = GrowMapCache()
         self._control        = ControlSafetyManager(KB_CONFIG, PROFILE)
         self._prompt_builder = PromptBuilder(self._grow_map, KB_CONFIG)
-        self._llm            = LLMClient()
+        self._llm            = LLMClient(OpenClawProvider(OPENCLAW_CONFIG, log))
         self._llm_busy       = threading.Lock()
         self._last_influx_ts = 0.0
         self._reconnect_delay = 1
@@ -1015,13 +1017,7 @@ class SmartMQTTBridge:
                  CURRENT_CROP, CURRENT_GROWTH_STAGE, CURRENT_GROWTH_DAY, TRAY_ID)
         if AI_BACKEND != "openclaw":
             log.warning("AI_BACKEND=%s is not supported in the active control path; forcing OpenClaw policy path", AI_BACKEND)
-        resolved_transport, resolved_endpoint = resolve_transport(OPENCLAW_URL, transport_mode=OPENCLAW_TRANSPORT)
-        log.info(
-            "Resolved OpenClaw endpoint: requested=%s transport=%s endpoint=%s",
-            OPENCLAW_URL,
-            resolved_transport,
-            resolved_endpoint,
-        )
+        self._llm.log_provider_startup()
         log.info("InfluxDB: %s  bucket=%s", influx.INFLUX_URL, influx.INFLUX_BUCKET)
         log.info("Dry-run mode: %s", DRY_RUN)
         log.info("Operator reset topic: %s", OPERATOR_RESET_TOPIC)
