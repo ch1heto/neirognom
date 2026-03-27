@@ -1,3 +1,5 @@
+"""Deprecated legacy OpenClaw transport client. OpenClaw is no longer the core runtime path."""
+
 from __future__ import annotations
 
 import json

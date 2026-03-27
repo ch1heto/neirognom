@@ -1,287 +1,138 @@
-# Neuroagronom Hybrid Control Architecture
+# Greenhouse Backend-Centric Architecture
 
-This project implements a hybrid control system for hydroponic nutrient-solution management.
+This repository now targets a backend-centric greenhouse control runtime.
 
-Stage-1 product scope:
-- measured directly: `ph`, `ec`, `water_level`
-- automatically actuated: `ph`
-- contextual/diagnostic only: `ec`
-- optional / not onboarded by default: `temp`, `humidity`, `soil`
+## Target runtime path
 
-## Roles
+- `ESP32` is edge only: sensors, actuators, local watchdogs, safe mode.
+- `MQTT` is transport only.
+- `Backend` is the single source of truth and final safety gate.
+- `Llama 3.1` is a reasoning engine used only by backend.
+- `OpenClaw` is an external MCP/operator layer that talks to backend tools and never touches devices directly.
 
-- `ESP32`
-  - edge device only
-  - reads sensors
-  - publishes telemetry over MQTT
-  - receives commands over MQTT
-  - executes low-level actuator commands
-  - emits command acknowledgements over MQTT
-  - applies local low-level failsafes such as low-water command rejection
+## Package map
 
-- `MQTT`
-  - transport layer only
-  - does not own policy, safety, runtime state, or reasoning
+- `shared/contracts/messages.py`
+  - strict DTOs for telemetry, state, commands, LLM recommendations, safety decisions, alerts
+- `mqtt/topics.py`
+  - canonical MQTT topic builder/parser
+- `backend/config.py`
+  - runtime config for MQTT, PostgreSQL/sqlite compatibility, zones, Llama, OpenClaw operator settings
+- `backend/state/store.py`
+  - state store abstraction
+  - `PostgresStateStore` is the target backend
+  - `SQLiteCompatibilityStateStore` is a deprecated migration adapter
+- `backend/decision_engine/engine.py`
+  - deterministic rules first, Llama only as fallback recommendation source
+- `backend/safety/validator.py`
+  - final backend safety gate
+- `backend/dispatcher/service.py`
+  - command state machine and MQTT dispatch
+- `backend/ingestion/service.py`
+  - MQTT ingestion, validation, dedup, routing
+- `backend/api/tools.py`
+  - backend tool/API surface for operators
+- `integrations/llama/client.py`
+  - local Llama API client
+- `integrations/openclaw_mcp/tools.py`
+  - OpenClaw operator adapter to backend tools
+- `backend/runtime.py`
+  - canonical runtime wiring
+- `backend_server.py`
+  - canonical entrypoint
+- `smart_bridge.py`
+  - deprecated compatibility adapter that delegates to backend runtime
 
-- [`smart_bridge.py`](./smart_bridge.py)
-  - mandatory control plane
-  - consumes raw telemetry from MQTT
-  - builds operational state from telemetry windows
-  - computes freshness, completeness, readiness, risks, pending effects, and safety blocks
-  - decides whether reasoning is needed
-  - prepares structured context for OpenClaw
-  - validates policy JSON from OpenClaw
-  - publishes only safe commands
-  - tracks acknowledgements, fallbacks, and post-dose effect windows
+## Data flow
 
-- `OpenClaw`
-  - policy and reasoning layer only
-  - never receives raw MQTT packets directly
-  - receives structured operational context from `smart_bridge.py`
-  - returns one structured JSON policy response
+1. Edge publishes `greenhouse/device/{device_id}/telemetry/raw` or `.../state`.
+2. `backend.ingestion.service.IngestionService` validates and deduplicates payloads.
+3. `backend.state.store` updates current state and telemetry history.
+4. `backend.decision_engine.engine.DecisionEngine` applies deterministic rules.
+5. Only if deterministic rules do not fully answer, backend asks `integrations.llama.client.LlamaDecisionClient`.
+6. Backend converts any recommendation into `ActionProposal`.
+7. `backend.safety.validator.SafetyValidator` performs final validation.
+8. `backend.dispatcher.service.CommandDispatcher` creates `CommandRequest`, publishes MQTT, and manages lifecycle:
+   - `queued`
+   - `sent`
+   - `acked`
+   - `running`
+   - `completed`
+   - `failed`
+   - `expired`
+   - `rejected_by_safety`
+9. ACK/RESULT topics update command lifecycle back into the state store.
+10. OpenClaw, if used, consumes backend tools only:
+   - `get_current_state`
+   - `get_zone_state`
+   - `get_sensor_history`
+   - `get_active_alerts`
+   - `propose_action`
+   - `execute_manual_action`
+   - `get_command_status`
 
-- `InfluxDB`
-  - observability and history only
-  - not part of decision-making
+## MQTT contracts
 
-- `SQLite`
-  - audit trail and runtime state
-  - stores alerts, llm requests, commands, control events, and actuator state
+- `greenhouse/device/{device_id}/telemetry/raw`
+- `greenhouse/device/{device_id}/state`
+- `greenhouse/device/{device_id}/cmd/execute`
+- `greenhouse/device/{device_id}/cmd/ack`
+- `greenhouse/device/{device_id}/cmd/result`
+- `greenhouse/device/{device_id}/event/error`
 
-## Control Philosophy
+QoS recommendation: `1` for all runtime messages in this repository.
 
-Deterministic Python owns:
-- transport handling
-- timing and retries
-- command validation
-- actuator allowlists
-- duration bounds
-- conflict checks
-- telemetry freshness and completeness
-- readiness state
-- escalation/operator locks
-- command acknowledgement tracking
-- fallback rules
-- post-dose effect tracking
+## Safety model
 
-OpenClaw owns:
-- tactical interpretation
-- selected correction strategy
-- explanation
-- stop and escalation recommendations
+Per-zone:
+- cooldown
+- max duration per run
+- max runs per hour
+- max total water per day
+- blocked flag
+- last watering timestamp
+- last error timestamp
 
-OpenClaw is explicitly forbidden from directly controlling MQTT or hardware semantics.
+Global:
+- max simultaneous zones
+- emergency stop
+- master pump timeout
+- flow limit window
+- leak shutdown
 
-## Runtime Flow
+## Environment
 
-1. ESP32 publishes telemetry on topics such as:
-   - `farm/tray01/telemetry/ph`
-   - `farm/tray01/telemetry/ec`
-   - `farm/tray01/telemetry/water_level`
-2. [`smart_bridge.py`](./smart_bridge.py) aggregates telemetry into sensor windows.
-3. The bridge computes:
-   - latest values
-   - trends
-   - freshness
-   - completeness
-   - readiness
-   - deviations
-   - risks
-   - pending command acknowledgements
-   - pending effect windows
-   - recent corrective actions
-   - escalation / operator lock state
-4. The bridge decides whether reasoning is required.
-5. If reasoning is required, the bridge sends structured context to OpenClaw.
-6. OpenClaw returns a strict JSON policy response.
-7. [`command_gateway.py`](./command_gateway.py) validates the response.
-8. Only validated commands are published to MQTT.
-9. ESP32 acknowledges command progress via MQTT: `received`, `executing`, `done`, or `failed`.
-10. Only after `done` does the bridge start effect tracking.
-11. Later telemetry confirms whether the expected physical effect occurred.
+See [.env.example](/V:/work/DIPLOM/testMoskitto/.env.example).
 
-## Reasoning Trigger
+Key variables:
+- `STATE_STORE_BACKEND=postgres|sqlite_compat|memory`
+- `POSTGRES_DSN`
+- `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`
+- `ZONE_IDS`
+- `LLAMA_API_URL`, `LLAMA_MODEL`
+- `OPENCLAW_OPERATOR_ENABLED`, `OPENCLAW_OPERATOR_URL`
 
-The bridge calls OpenClaw only when all of the following are true:
-
-- new telemetry has arrived since the last control decision
-- there is a pH deviation outside the current stage target
-- the metric is configured as a reasoning-trigger metric
-- required reasoning inputs are fresh for that metric
-- stage-1 readiness is sufficient for reasoning
-
-Current stage-1 reasoning requirement for pH:
-- `ph` fresh
-- `ec` fresh
-- `water_level` fresh
-
-The bridge skips OpenClaw and logs the reason when:
-- pH and EC are already inside policy
-- deviations exist but required reasoning inputs are missing
-- deterministic safety has already blocked action
-- the LLM worker is already busy and no new decision can start
-
-## OpenClaw Contract
-
-OpenClaw receives a structured context prepared by the bridge. It includes:
-- current telemetry values and trends
-- available metrics
-- required metrics
-- telemetry completeness and readiness
-- telemetry profile and not-onboarded metrics
-- stage targets
-- deviations
-- active safety blocks
-- risk state
-- recent actions
-- pending effect checks
-- pending command acknowledgements
-- operator lock / escalation conditions
-- actuator state and actuator capabilities
-- recovery protocol hints
-
-OpenClaw must return exactly one JSON object matching [`openclaw_policy_schema.json`](./openclaw_policy_schema.json).
-
-Required top-level fields:
-- `summary`
-- `selected_strategy`
-- `risk_level`
-- `risks`
-- `recommended_commands`
-- `recheck_interval_sec`
-- `stop_conditions`
-- `escalation_conditions`
-
-`recommended_commands` contains logical actuator commands only. It must not contain MQTT topics or raw transport instructions.
-
-## MQTT Command / Ack Flow
-
-Command publish topic example:
-- `farm/tray01/cmd/chemical/ph_down`
-
-Published command payload example:
-
-```json
-{
-  "command_id": "cmd-a1b2c3d4e5f6",
-  "actuator": "ph_down_pump",
-  "action": "ON",
-  "duration_sec": 10,
-  "reason": "lower pH toward stage target",
-  "llm_req_id": 42,
-  "issued_at": 1774435200
-}
-```
-
-Ack topic example:
-- `farm/tray01/ack/chemical/ph_down`
-
-Ack payload example:
-
-```json
-{
-  "command_id": "cmd-a1b2c3d4e5f6",
-  "ack_state": "done",
-  "actuator": "ph_down_pump",
-  "action": "ON",
-  "message": "completed",
-  "timestamp": 1774435203
-}
-```
-
-Ack states:
-- `received`
-- `executing`
-- `done`
-- `failed`
-
-If final acknowledgement is missing before the timeout:
-- the bridge records `ACK_TIMEOUT`
-- the command remains unconfirmed
-- effect tracking does not start
-
-If acknowledgement is `failed`:
-- the bridge records command failure
-- effect tracking does not start
-- the command is visible in SQLite audit history
-
-## SQLite Audit Trail
-
-Key `control_events` emitted by the bridge stack:
-- `bridge_status`
-- `llm_decision`
-- `llm_context`
-- `llm_result`
-- `policy_result`
-- `command_batch`
-- `command_accepted`
-- `command_rejected`
-- `command_dispatch`
-- `command_execution`
-- `command_ack`
-- `fallback`
-- `effect_check`
-- `escalation`
-- `operator_reset`
-
-## Local Windows Run Order
-
-Environment defaults for local testing:
+## Local run
 
 ```powershell
-$env:AI_BACKEND='openclaw'
-$env:OPENCLAW_URL='http://127.0.0.1:18789/v1/chat/completions'
-$env:OPENCLAW_TRANSPORT='http'
-$env:OPENCLAW_AUTH_TOKEN='<gateway token if HTTP auth is enabled>'
+.\venv\Scripts\python.exe .\backend_server.py
 ```
 
-1. Start a local MQTT broker.
-2. Start the bridge:
+The old entrypoint still exists:
 
 ```powershell
-$env:APP_PROFILE='test'
-$env:AI_BACKEND='openclaw'
-$env:OPENCLAW_URL='http://127.0.0.1:18789/v1/chat/completions'
-$env:OPENCLAW_TRANSPORT='http'
-$env:OPENCLAW_AUTH_TOKEN='<gateway token if HTTP auth is enabled>'
-$env:TRAY_ID='tray01'
-$env:MQTT_HOST='localhost'
-$env:MQTT_PORT='1883'
 .\venv\Scripts\python.exe .\smart_bridge.py
 ```
 
-3. Optional local dashboard:
+but it only forwards to the new backend runtime and should be treated as deprecated.
 
-```powershell
-.\venv\Scripts\python.exe .\dashboard_server.py
-```
+## Migration notes
 
-4. Start the simulator:
-
-```powershell
-$env:TRAY_ID='tray01'
-$env:MQTT_BROKER_HOST='localhost'
-$env:MQTT_BROKER_PORT='1883'
-$env:PUBLISH_INTERVAL_SEC='1'
-.\venv\Scripts\python.exe .\sim_esp32_stress.py
-```
-
-5. Optional operator inspection:
-
-```powershell
-.\venv\Scripts\python.exe .\operator_cli.py status
-.\venv\Scripts\python.exe .\operator_cli.py events --limit 20
-```
-
-6. Optional operator reset:
-
-```powershell
-.\venv\Scripts\python.exe .\operator_cli.py reset ph
-```
-
-## Production Notes
-
-- `APP_PROFILE=prod` keeps the same control logic and safety flow.
-- Only deployment/runtime configuration changes between `test` and `prod`.
-- OpenClaw is the only AI entry point in the normal path.
-- Missing optional metrics do not trigger panic when they are marked as not onboarded.
+- The old OpenClaw-central path is no longer the primary runtime path.
+- `openclaw_client.py`, `command_gateway.py`, `control_runtime.py`, and the old SQLite audit flow are legacy artifacts until the remaining UI/diagnostic surfaces are migrated.
+- Production deployment should use:
+  - Ubuntu
+  - Mosquitto
+  - PostgreSQL
+  - local Llama runtime
+  - OpenClaw as an external operator client

@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+from enum import StrEnum
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class CommandLifecycle(StrEnum):
+    QUEUED = "queued"
+    SENT = "sent"
+    ACKED = "acked"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    EXPIRED = "expired"
+    REJECTED_BY_SAFETY = "rejected_by_safety"
+
+
+class DeviceConnectivity(StrEnum):
+    ONLINE = "online"
+    OFFLINE = "offline"
+    DEGRADED = "degraded"
+    SAFE_MODE = "safe_mode"
+
+
+class DecisionOrigin(StrEnum):
+    DETERMINISTIC = "deterministic"
+    LLAMA = "llama"
+    OPERATOR = "operator"
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+class TelemetryMessage(StrictModel):
+    message_id: str = Field(min_length=8, max_length=128)
+    trace_id: str = Field(min_length=8, max_length=128)
+    device_id: str = Field(min_length=1, max_length=64)
+    zone_id: str = Field(min_length=1, max_length=64)
+    ts_ms: int = Field(ge=0)
+    local_ts_ms: int = Field(ge=0)
+    sensors: dict[str, float | int | bool | str]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeviceStateMessage(StrictModel):
+    message_id: str = Field(min_length=8, max_length=128)
+    trace_id: str = Field(min_length=8, max_length=128)
+    device_id: str = Field(min_length=1, max_length=64)
+    zone_id: str = Field(min_length=1, max_length=64)
+    ts_ms: int = Field(ge=0)
+    connectivity: DeviceConnectivity
+    firmware_version: str | None = None
+    state: dict[str, Any] = Field(default_factory=dict)
+
+
+class CommandRequest(StrictModel):
+    command_id: str = Field(min_length=8, max_length=128)
+    trace_id: str = Field(min_length=8, max_length=128)
+    device_id: str = Field(min_length=1, max_length=64)
+    zone_id: str = Field(min_length=1, max_length=64)
+    actuator: str = Field(min_length=1, max_length=64)
+    action: str = Field(min_length=1, max_length=64)
+    created_at_ms: int = Field(ge=0)
+    expires_at_ms: int = Field(ge=0)
+    max_duration_ms: int = Field(ge=0)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    origin: DecisionOrigin
+    reason: str = ""
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class CommandAck(StrictModel):
+    message_id: str = Field(min_length=8, max_length=128)
+    trace_id: str = Field(min_length=8, max_length=128)
+    command_id: str = Field(min_length=8, max_length=128)
+    device_id: str = Field(min_length=1, max_length=64)
+    zone_id: str = Field(min_length=1, max_length=64)
+    state: Literal["queued", "received", "acked", "running", "failed", "expired"]
+    acked_at_ms: int = Field(ge=0)
+    details: str = ""
+
+
+class CommandResult(StrictModel):
+    message_id: str = Field(min_length=8, max_length=128)
+    trace_id: str = Field(min_length=8, max_length=128)
+    command_id: str = Field(min_length=8, max_length=128)
+    device_id: str = Field(min_length=1, max_length=64)
+    zone_id: str = Field(min_length=1, max_length=64)
+    final_state: Literal["completed", "failed", "expired"]
+    result_at_ms: int = Field(ge=0)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    details: str = ""
+
+
+class SafetyDecision(StrictModel):
+    trace_id: str = Field(min_length=8, max_length=128)
+    device_id: str = Field(min_length=1, max_length=64)
+    zone_id: str = Field(min_length=1, max_length=64)
+    allowed: bool
+    lifecycle_state: CommandLifecycle
+    origin: DecisionOrigin
+    reasons: list[str] = Field(default_factory=list)
+    actuator: str | None = None
+    action: str | None = None
+    max_duration_ms: int | None = Field(default=None, ge=0)
+
+
+class LlmDecisionRequest(StrictModel):
+    trace_id: str = Field(min_length=8, max_length=128)
+    device_id: str = Field(min_length=1, max_length=64)
+    zone_id: str = Field(min_length=1, max_length=64)
+    current_state: dict[str, Any]
+    telemetry_window: list[dict[str, Any]] = Field(default_factory=list)
+    zone_limits: dict[str, Any] = Field(default_factory=dict)
+    global_limits: dict[str, Any] = Field(default_factory=dict)
+
+
+class LlmDecisionResponse(StrictModel):
+    decision: Literal["no_action", "water_zone", "stop_zone", "ventilate_zone", "block_zone"]
+    zone_id: str = Field(min_length=1, max_length=64)
+    actuator: str | None = None
+    action: str | None = None
+    duration_sec: int | None = Field(default=None, ge=0, le=3600)
+    reason: str = ""
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class AlertEvent(StrictModel):
+    alert_id: str = Field(min_length=8, max_length=128)
+    trace_id: str = Field(min_length=8, max_length=128)
+    device_id: str = Field(min_length=1, max_length=64)
+    zone_id: str = Field(min_length=1, max_length=64)
+    severity: Literal["info", "warning", "critical", "emergency"]
+    category: str = Field(min_length=1, max_length=64)
+    message: str = Field(min_length=1, max_length=512)
+    created_at_ms: int = Field(ge=0)
+    details: dict[str, Any] = Field(default_factory=dict)

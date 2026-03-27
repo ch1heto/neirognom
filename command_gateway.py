@@ -1,3 +1,5 @@
+"""Deprecated legacy command gateway. New runtime path is backend.dispatcher.service."""
+
 from __future__ import annotations
 
 import json

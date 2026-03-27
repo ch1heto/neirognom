@@ -1,3 +1,5 @@
+"""Deprecated legacy control runtime. New runtime path is backend.decision_engine + backend.safety."""
+
 from __future__ import annotations
 
 import logging
