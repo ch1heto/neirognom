@@ -14,21 +14,21 @@ from tests.harness import BackendTestHarness
 class BackendIntegrationTests(unittest.TestCase):
     def test_ingestion_updates_state_and_dispatches_deterministic_command(self) -> None:
         harness = BackendTestHarness()
-        harness.seed_device_state(device_state_payload())
+        harness.seed_device_state(device_state_payload(state={"valve_open": True, "doser_active": False, "pump_on": False}))
 
         harness.ingest_telemetry(
             telemetry_payload(
                 message_id="msg-integration-telemetry-0001",
                 trace_id="trace-integration-telemetry-0001",
-                sensors={"soil_moisture": 12.0, "temperature": 23.0, "tank_level": 85.0},
+                sensors={"ph": 6.1, "ec": 1.7, "water_level": 5.0},
             )
         )
 
         zone = harness.store.get_zone_state("tray_1")
-        self.assertEqual(zone["telemetry"]["soil_moisture"], 12.0)
+        self.assertEqual(zone["telemetry"]["water_level"], 5.0)
         self.assertEqual(len(harness.mqtt.published), 1)
         self.assertEqual(harness.mqtt.published[0]["topic"], "greenhouse/device/esp32-1/cmd")
-        self.assertEqual(harness.mqtt.published[0]["payload"]["step"], "open_valve")
+        self.assertEqual(harness.mqtt.published[0]["payload"]["action"], "CLOSE")
 
     def test_duplicate_mqtt_message_is_ignored_and_audited(self) -> None:
         harness = BackendTestHarness()
@@ -36,13 +36,14 @@ class BackendIntegrationTests(unittest.TestCase):
         payload = telemetry_payload(
             message_id="msg-duplicate-0001",
             trace_id="trace-duplicate-0001",
-            sensors={"soil_moisture": 14.0, "temperature": 22.0, "tank_level": 88.0},
+            sensors={"ph": 6.0, "ec": 1.6, "water_level": 88.0},
         )
 
         harness.ingest_telemetry(payload)
+        published_after_first = len(harness.mqtt.published)
         harness.ingest_telemetry(payload)
 
-        self.assertEqual(len(harness.mqtt.published), 1)
+        self.assertEqual(len(harness.mqtt.published), published_after_first)
         incidents = [entry for entry in harness.store._audit_logs if entry["action_type"] == "INCIDENT"]
         self.assertTrue(any(entry["message"] == "replay_suspected" for entry in incidents))
 
@@ -56,7 +57,7 @@ class BackendIntegrationTests(unittest.TestCase):
                 trace_id="trace-current-telemetry-0001",
                 ts_ms=10_000,
                 message_counter=10,
-                sensors={"soil_moisture": 25.0, "temperature": 23.0, "tank_level": 85.0},
+                sensors={"ph": 6.1, "ec": 1.7, "water_level": 85.0},
             )
         )
         published_after_current = len(harness.mqtt.published)
@@ -66,13 +67,13 @@ class BackendIntegrationTests(unittest.TestCase):
                 trace_id="trace-old-telemetry-0001",
                 ts_ms=5_000,
                 message_counter=11,
-                sensors={"soil_moisture": 9.0, "temperature": 19.0, "tank_level": 70.0},
+                sensors={"ph": 5.3, "ec": 0.9, "water_level": 70.0},
             )
         )
 
         zone = harness.store.get_zone_state("tray_1")
-        history = harness.telemetry_history.get_sensor_history("esp32-1", "soil_moisture", 0, 20_000)
-        self.assertEqual(zone["telemetry"]["soil_moisture"], 25.0)
+        history = harness.telemetry_history.get_sensor_history("esp32-1", "ph", 0, 20_000)
+        self.assertEqual(zone["telemetry"]["ph"], 6.1)
         self.assertEqual(len(harness.mqtt.published), published_after_current)
         self.assertTrue(any(item["message_id"] == "msg-old-telemetry-0001" for item in history))
         self.assertTrue(any(entry["message"] == "out_of_order" for entry in harness.store._audit_logs))
@@ -87,7 +88,7 @@ class BackendIntegrationTests(unittest.TestCase):
                 trace_id="trace-counter-current-0001",
                 ts_ms=10_000,
                 message_counter=10,
-                sensors={"soil_moisture": 25.0, "temperature": 23.0, "tank_level": 85.0},
+                sensors={"ph": 6.1, "ec": 1.7, "water_level": 85.0},
             )
         )
         published_after_current = len(harness.mqtt.published)
@@ -97,12 +98,12 @@ class BackendIntegrationTests(unittest.TestCase):
                 trace_id="trace-counter-stale-0001",
                 ts_ms=10_100,
                 message_counter=6,
-                sensors={"soil_moisture": 8.0, "temperature": 18.0, "tank_level": 60.0},
+                sensors={"ph": 5.2, "ec": 0.8, "water_level": 60.0},
             )
         )
 
         zone = harness.store.get_zone_state("tray_1")
-        self.assertEqual(zone["telemetry"]["soil_moisture"], 25.0)
+        self.assertEqual(zone["telemetry"]["ph"], 6.1)
         self.assertEqual(len(harness.mqtt.published), published_after_current)
         self.assertTrue(any(entry["payload"].get("reason") == "stale_message_counter" for entry in harness.store._audit_logs if entry["action_type"] == "INCIDENT"))
 
@@ -116,7 +117,7 @@ class BackendIntegrationTests(unittest.TestCase):
                 trace_id="trace-counter-base-0001",
                 ts_ms=10_000,
                 message_counter=10,
-                sensors={"soil_moisture": 25.0, "temperature": 23.0, "tank_level": 85.0},
+                sensors={"ph": 6.1, "ec": 1.7, "water_level": 85.0},
             )
         )
         published_after_base = len(harness.mqtt.published)
@@ -126,13 +127,13 @@ class BackendIntegrationTests(unittest.TestCase):
                 trace_id="trace-counter-reorder-0001",
                 ts_ms=9_900,
                 message_counter=9,
-                sensors={"soil_moisture": 7.0, "temperature": 20.0, "tank_level": 80.0},
+                sensors={"ph": 5.4, "ec": 0.95, "water_level": 80.0},
             )
         )
 
         zone = harness.store.get_zone_state("tray_1")
-        history = harness.telemetry_history.get_sensor_history("esp32-1", "soil_moisture", 0, 20_000)
-        self.assertEqual(zone["telemetry"]["soil_moisture"], 25.0)
+        history = harness.telemetry_history.get_sensor_history("esp32-1", "ph", 0, 20_000)
+        self.assertEqual(zone["telemetry"]["ph"], 6.1)
         self.assertEqual(len(harness.mqtt.published), published_after_base)
         self.assertTrue(any(item["message_id"] == "msg-counter-reorder-0001" for item in history))
         self.assertTrue(any(entry["payload"].get("reason") == "out_of_order_counter" for entry in harness.store._audit_logs if entry["action_type"] == "INCIDENT"))

@@ -7,6 +7,7 @@ The backend test suite is split into small layers so safety and execution rules 
 - `tests/test_backend_ai_flow.py`: Llama-driven decision path with mocked responses only.
 - `tests/test_backend_operator_flow.py`: manual operator actions through the same validation and dispatcher path as automation.
 - `tests/test_backend_architecture.py`: lower-level state/security regression coverage kept from the architecture refactor.
+- `tests/test_sim_esp32.py`: local fake-device simulator contract for the hydroponic runtime.
 
 Reusable helpers live in:
 
@@ -43,17 +44,19 @@ Run the current fake ESP32 simulator in a second terminal:
 
 Supported simulator modes:
 
-- `normal`: safe changing telemetry, usually no deterministic trigger
-- `dry`: low soil moisture, should trigger deterministic irrigation
-- `wet`: high soil moisture, useful to avoid deterministic watering and let backend fall through to Llama if configured
-- `hot`: high temperature, should trigger deterministic ventilation
+- `normal`: pH/EC/water_level drift around target values for all four trays
+- `low_ph`: keeps pH below target and is intended to exercise the Llama path
+- `high_ph`: keeps pH above target and is intended to exercise the Llama path
+- `low_ec`: keeps EC below target and is intended to exercise the Llama path
+- `high_ec`: keeps EC above target and is intended to exercise the Llama path
+- `low_water`: drops water level low enough to trigger deterministic safety handling
 
 Useful examples:
 
 ```powershell
-.\venv\Scripts\python.exe .\sim_esp32.py --mode dry
-.\venv\Scripts\python.exe .\sim_esp32.py --mode wet
-.\venv\Scripts\python.exe .\sim_esp32.py --mode hot
+.\venv\Scripts\python.exe .\sim_esp32.py --mode low_ph
+.\venv\Scripts\python.exe .\sim_esp32.py --mode low_ec
+.\venv\Scripts\python.exe .\sim_esp32.py --tray-id tray_1 --mode low_water
 ```
 
 Manual operator path:
@@ -61,14 +64,14 @@ Manual operator path:
 - start the backend
 - start the simulator
 - open the operator UI, by default `http://127.0.0.1:8780`
-- trigger `test_watering`, `open valve`, `close valve`, `start pump`, or `stop pump`
-- watch simulator stdout for command, ACK, RESULT, and current fake state
+- trigger `Открыть клапан`, `Закрыть клапан`, or `Дозировать раствор`
+- watch simulator stdout for command, ACK, RESULT, and the current tray state
 
 Llama path:
 
 - run backend with a working local Llama endpoint
-- start the simulator in `normal` or `wet` mode so deterministic rules do not fire first
-- backend should then fall through to the Llama decision path
+- start the simulator in `low_ph`, `high_ph`, `low_ec`, or `high_ec`
+- backend should then build hydroponic context from `ph`, `ec`, and `water_level` and fall through to the Llama decision path
 
 ## Design rules
 

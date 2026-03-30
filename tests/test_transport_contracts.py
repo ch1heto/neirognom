@@ -77,7 +77,7 @@ class TransportContractTests(unittest.TestCase):
                 "zone_id": "tray_1",
                 "timestamp": 1000,
                 "message_counter": 11,
-                "sensors": {"soil_moisture": 18.0},
+                "sensors": {"ph": 6.1, "ec": 1.7, "water_level": 18.0},
                 "status": {"online": True},
                 "meta": {"fw": "1.2.3"},
             }
@@ -90,7 +90,7 @@ class TransportContractTests(unittest.TestCase):
                 "zone_id": "tray_1",
                 "ts_ms": 1002,
                 "local_ts_ms": 1003,
-                "sensors": {"soil_moisture": 17.5},
+                "sensors": {"ph": 6.0, "ec": 1.8, "water_level": 17.5},
                 "metadata": {"message_counter": 12},
             }
         )
@@ -176,20 +176,20 @@ class TransportContractTests(unittest.TestCase):
                 "source": "backend",
                 "target_device_id": "esp32-1",
                 "target_zone_id": "tray_1",
-                "action": "OFF",
-                "duration_sec": 0,
-                "ttl_sec": 0,
-                "created_at": 1000,
-                "safety_caps": {
-                    "local_hard_max_duration_ms": 0,
-                    "allowed_runtime_window_ms": 0,
-                },
-                "execution_id": "exec-command-stop-0001",
-                "actuator": "master_pump",
-                "step": "stop_pump",
-                "nonce": "nonce-command-stop-0001",
-            }
-        )
+                "action": "STOP",
+                    "duration_sec": 0,
+                    "ttl_sec": 0,
+                    "created_at": 1000,
+                    "safety_caps": {
+                        "local_hard_max_duration_ms": 0,
+                        "allowed_runtime_window_ms": 0,
+                    },
+                    "execution_id": "exec-command-stop-0001",
+                    "actuator": "nutrient_doser",
+                    "step": "stop_doser",
+                    "nonce": "nonce-command-stop-0001",
+                }
+            )
         self.assertEqual(command.ttl_sec, 0)
 
     def test_presence_model_accepts_canonical_and_safe_mode_values(self) -> None:

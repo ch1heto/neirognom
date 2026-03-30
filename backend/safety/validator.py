@@ -20,6 +20,7 @@ from shared.contracts.messages import CommandLifecycle, DecisionOrigin, SafetyDe
 DEFAULT_ALLOWED_ACTIONS: dict[str, set[str]] = {
     "irrigation_sequence": {"START", "ABORT"},
     "irrigation_valve": {"OPEN", "CLOSE"},
+    "nutrient_doser": {"START", "STOP"},
     "master_pump": {"ON", "OFF"},
     "vent_fan": {"ON", "OFF"},
     "grow_light": {"ON", "OFF", "DIM_50"},
@@ -79,11 +80,15 @@ class SafetyValidator:
         line_id = str(zone.get("line_id") or (topology.line_id if topology else "") or "")
         exclusive_zones = self._exclusive_zones(proposal.zone_id, zone, zones)
         effective_duration_sec = self._effective_duration_sec(proposal, zone, topology)
+        water_level = telemetry.get("water_level")
 
         if proposal.actuator not in self._allowed_actions:
             reasons.append(f"actuator_not_allowed:{proposal.actuator}")
         elif proposal.action.upper() not in self._allowed_actions[proposal.actuator]:
             reasons.append(f"action_not_allowed:{proposal.actuator}:{proposal.action}")
+
+        if self._is_hydroponic_activation(proposal) and isinstance(water_level, (int, float)) and float(water_level) <= 10.0:
+            reasons.append("water_level_too_low")
 
         if topology is not None and zone_device_id and proposal.device_id != zone_device_id:
             reasons.append(f"zone_device_mismatch:{proposal.zone_id}:{zone_device_id}:{proposal.device_id}")
@@ -190,6 +195,10 @@ class SafetyValidator:
             if store.total_completed_volume_since(now_ms - flow_window_ms) >= float(current_state.get("global", {}).get("total_flow_limit_per_window_ml") or 0):
                 reasons.append("global_flow_limit_reached")
 
+        if proposal.actuator == "nutrient_doser" and proposal.action.upper() == "START":
+            if isinstance(water_level, (int, float)) and float(water_level) <= 10.0:
+                reasons.append("water_level_too_low")
+
         allowed = not reasons
         return SafetyDecision(
             trace_id=proposal.trace_id,
@@ -211,12 +220,18 @@ class SafetyValidator:
     def _is_irrigation_activation(self, proposal: ActionProposal) -> bool:
         return self._is_activating_action(proposal.action) and proposal.actuator in {"irrigation_sequence", "irrigation_valve", "master_pump"}
 
+    @staticmethod
+    def _is_hydroponic_activation(proposal: ActionProposal) -> bool:
+        return SafetyValidator._is_activating_action(proposal.action) and proposal.actuator in {"irrigation_sequence", "irrigation_valve", "master_pump", "nutrient_doser"}
+
     def _effective_duration_sec(self, proposal: ActionProposal, zone: dict[str, Any], topology: ZoneSafetyConfig | None) -> int:
         requested = max(0, int(proposal.duration_sec))
         if not self._is_activating_action(proposal.action):
             return 0
         if proposal.actuator == "master_pump":
             return min(requested, int(self._config.global_safety.master_pump_timeout_sec))
+        if proposal.actuator == "nutrient_doser":
+            return min(requested, int(self._config.global_safety.max_manual_duration_sec))
         if proposal.actuator in {"irrigation_sequence", "irrigation_valve"}:
             zone_cap = int(zone.get("max_open_duration_sec") or zone.get("max_duration_per_run_sec") or (topology.max_open_duration_sec if topology else 0) or 0)
             return min(requested, zone_cap) if zone_cap > 0 else 0

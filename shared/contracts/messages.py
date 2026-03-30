@@ -444,7 +444,7 @@ class SafetyDecision(StrictModel):
 
 
 class LlmAllowedAction(StrictModel):
-    decision: Literal["no_action", "water_zone", "stop_zone", "ventilate_zone", "block_zone"]
+    decision: Literal["no_action", "open_valve", "close_valve", "dose_solution"]
     actuator: str | None = None
     action: str | None = None
     max_duration_sec: int = Field(default=0, ge=0, le=3600)
@@ -484,17 +484,16 @@ class LlmDecisionRequest(StrictModel):
         if not payload.get("global_state") and isinstance(current_state, dict):
             payload["global_state"] = current_state.get("global") or {}
         if not payload.get("telemetry_windows") and isinstance(payload.get("telemetry_window"), list):
-            payload["telemetry_windows"] = {"soil_moisture": payload.get("telemetry_window", [])}
+            payload["telemetry_windows"] = {"ph": payload.get("telemetry_window", [])}
         return payload
 
 
 class LlmDecisionResponse(StrictModel):
-    decision: Literal["no_action", "water_zone", "stop_zone", "ventilate_zone", "block_zone"]
+    decision: Literal["no_action", "open_valve", "close_valve", "dose_solution"]
     zone_id: str = Field(min_length=1, max_length=64)
-    actuator: str | None = None
-    action: str | None = None
-    duration_sec: int | None = Field(default=None, ge=0, le=3600)
-    reason: str = ""
+    requested_duration_sec: int | None = Field(default=None, ge=0, le=3600)
+    dose_ml: int | None = Field(default=None, ge=0, le=10_000)
+    rationale: str = Field(min_length=1, max_length=512)
     confidence: float = Field(ge=0.0, le=1.0)
 
 

@@ -60,7 +60,7 @@ class BackendUnitTests(unittest.TestCase):
                 "zone_id": "tray_1",
                 "timestamp": 1_000,
                 "message_counter": 7,
-                "sensors": {"soil_moisture": 21.5},
+                "sensors": {"ph": 6.1},
                 "status": {"online": True},
                 "meta": {"firmware": "1.0.0"},
             }
@@ -416,12 +416,13 @@ class BackendUnitTests(unittest.TestCase):
 
     def test_decision_engine_prefers_deterministic_policy_before_llama(self) -> None:
         harness = BackendTestHarness()
-        harness.seed_device_state(device_state_payload())
+        harness.seed_device_state(device_state_payload(state={"valve_open": True, "doser_active": False, "pump_on": False}))
         harness.llama.response = {
-            "decision": "water_zone",
+            "decision": "dose_solution",
             "zone_id": "tray_1",
-            "duration_sec": 20,
-            "reason": "llama fallback",
+            "requested_duration_sec": 6,
+            "dose_ml": 30,
+            "rationale": "llama fallback",
             "confidence": 0.75,
         }
 
@@ -430,15 +431,15 @@ class BackendUnitTests(unittest.TestCase):
                 telemetry_payload(
                     message_id="msg-unit-temp-0001",
                     trace_id="trace-unit-temp-0001",
-                    sensors={"soil_moisture": 42.0, "temperature": 31.5, "tank_level": 90.0},
+                    sensors={"ph": 6.0, "ec": 1.7, "water_level": 5.0},
                 )
             )
         )
 
         self.assertIsNotNone(proposal)
         assert proposal is not None
-        self.assertEqual(proposal.actuator, "vent_fan")
-        self.assertEqual(proposal.action, "ON")
+        self.assertEqual(proposal.actuator, "irrigation_valve")
+        self.assertEqual(proposal.action, "CLOSE")
         self.assertEqual(len(harness.llama.calls), 0)
 
 

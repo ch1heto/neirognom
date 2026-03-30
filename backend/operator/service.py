@@ -206,10 +206,10 @@ class OperatorControlService:
                             "operator_name": operator_name,
                             "zone_id": zone_id,
                             "device_id": device_id,
-                            "actuator": "master_pump",
-                            "action": "OFF",
+                            "actuator": "nutrient_doser",
+                            "action": "STOP",
                             "duration_sec": 0,
-                            "reason": f"emergency stop stop pump: {reason}",
+                            "reason": f"emergency stop stop doser: {reason}",
                             "metadata": {"emergency_stop": True},
                             "submitted_via": submitted_via,
                         }
@@ -242,11 +242,9 @@ class OperatorControlService:
         if not device_id and zone.get("device_id"):
             device_id = str(zone["device_id"])
         action_map = {
-            "open_valve": ("irrigation_valve", "OPEN", min(10, int(zone.get("max_duration_per_run_sec") or 10))),
+            "open_valve": ("irrigation_valve", "OPEN", min(10, int(zone.get("max_open_duration_sec") or zone.get("max_duration_per_run_sec") or 10))),
             "close_valve": ("irrigation_valve", "CLOSE", 0),
-            "start_pump": ("master_pump", "ON", min(10, int(self._config.global_safety.master_pump_timeout_sec))),
-            "stop_pump": ("master_pump", "OFF", 0),
-            "test_watering": ("irrigation_sequence", "START", min(10, int(zone.get("max_duration_per_run_sec") or 10))),
+            "dose_solution": ("nutrient_doser", "START", min(5, int(self._config.global_safety.max_manual_duration_sec))),
         }
         if ui_action:
             if ui_action not in action_map:
@@ -293,10 +291,10 @@ class OperatorControlService:
 
     def _duration_cap(self, actuator: str, zone: dict[str, Any]) -> int:
         global_manual_cap = max(0, int(self._config.global_safety.max_manual_duration_sec))
-        if actuator == "master_pump":
-            base_cap = int(self._config.global_safety.master_pump_timeout_sec)
+        if actuator == "nutrient_doser":
+            base_cap = global_manual_cap
         else:
-            base_cap = int(zone.get("max_duration_per_run_sec") or 0)
+            base_cap = int(zone.get("max_open_duration_sec") or zone.get("max_duration_per_run_sec") or 0)
         if global_manual_cap <= 0:
             return base_cap
         if base_cap <= 0:
@@ -415,7 +413,9 @@ class OperatorControlService:
         device_state = zone.get("device_state", {})
         online = str(device.get("connectivity") or "").lower() == "online"
         valve_open = bool(device_state.get("valve_open"))
-        pump_on = bool(device.get("state", {}).get("pump_on"))
+        doser_active = bool(device.get("state", {}).get("doser_active") or device_state.get("doser_active"))
+        water_level = telemetry.get("water_level")
+        water_available = not isinstance(water_level, (int, float)) or float(water_level) > 10.0
         any_other_reserved = any(
             other_zone.get("zone_id") != zone.get("zone_id") and other_zone.get("reserved_by_execution")
             for other_zone in current_state.get("zones", {}).values()
@@ -425,53 +425,31 @@ class OperatorControlService:
             return {"enabled": enabled, "reasons": [reason for reason in reasons if reason]}
 
         return {
-            "open_valve": guard(online and not valve_open and not blocking_lock_reasons and not any_other_reserved, [
+            "open_valve": guard(online and not valve_open and not blocking_lock_reasons and not any_other_reserved and not zone.get("blocked"), [
                 "" if online else "device_offline",
                 "" if not valve_open else "valve_already_open",
                 "" if not blocking_lock_reasons else ",".join(blocking_lock_reasons),
                 "" if not any_other_reserved else "valve_interlock_active",
+                "" if not zone.get("blocked") else "zone_blocked",
             ]),
             "close_valve": guard(valve_open or bool(zone.get("reserved_by_execution")), [
                 "" if (valve_open or bool(zone.get("reserved_by_execution"))) else "valve_not_open",
             ]),
-            "start_pump": guard(
-                online and valve_open and not pump_on and not blocking_lock_reasons and telemetry.get("tank_level", 1) > 0 and telemetry.get("leak") is not True,
+            "dose_solution": guard(
+                online and not doser_active and not blocking_lock_reasons and not zone.get("blocked") and water_available,
                 [
                     "" if online else "device_offline",
-                    "" if valve_open else "pump_precondition_no_open_valve",
-                    "" if not pump_on else "pump_already_on",
-                    "" if not blocking_lock_reasons else ",".join(blocking_lock_reasons),
-                    "" if telemetry.get("tank_level", 1) > 0 else "water_source_unavailable",
-                    "" if telemetry.get("leak") is not True else "leak_detected",
-                ],
-            ),
-            "stop_pump": guard(pump_on or bool(zone.get("reserved_by_execution")), [
-                "" if (pump_on or bool(zone.get("reserved_by_execution"))) else "pump_not_running",
-            ]),
-            "test_watering": guard(
-                online and not valve_open and not blocking_lock_reasons and not zone.get("blocked") and telemetry.get("tank_level", 1) > 0,
-                [
-                    "" if online else "device_offline",
-                    "" if not valve_open else "valve_already_open",
+                    "" if not doser_active else "doser_already_active",
                     "" if not blocking_lock_reasons else ",".join(blocking_lock_reasons),
                     "" if not zone.get("blocked") else "zone_blocked",
-                    "" if telemetry.get("tank_level", 1) > 0 else "water_source_unavailable",
+                    "" if water_available else "water_level_too_low",
                 ],
             ),
         }
 
     @staticmethod
     def _telemetry_summary(telemetry: dict[str, Any]) -> dict[str, Any]:
-        keys = (
-            "soil_moisture",
-            "temperature",
-            "humidity",
-            "tank_level",
-            "flow_rate_ml_per_min",
-            "pressure_kpa",
-            "leak",
-            "overflow",
-        )
+        keys = ("ph", "ec", "water_level")
         return {key: telemetry.get(key) for key in keys if key in telemetry}
 
     @classmethod

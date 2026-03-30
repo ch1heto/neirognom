@@ -34,7 +34,7 @@ class OpenClawMcpTests(unittest.TestCase):
             telemetry_payload(
                 message_id="msg-mcp-read-0001",
                 trace_id="trace-mcp-read-0001",
-                sensors={"soil_moisture": 27.0, "temperature": 22.0, "tank_level": 88.0},
+                sensors={"ph": 6.2, "ec": 1.8, "water_level": 88.0},
             )
         )
         response = harness.mcp_server.handle_rpc(
@@ -48,7 +48,7 @@ class OpenClawMcpTests(unittest.TestCase):
 
         payload = response["result"]["content"][0]["json"]
         self.assertEqual(payload["zone_id"], "tray_1")
-        self.assertEqual(payload["telemetry"]["tank_level"], 88.0)
+        self.assertEqual(payload["telemetry"]["water_level"], 88.0)
         self.assertIn("actions", payload)
 
     def test_propose_action_does_not_dispatch_hardware(self) -> None:
@@ -67,7 +67,7 @@ class OpenClawMcpTests(unittest.TestCase):
                         "operator_name": "OpenClaw",
                         "zone_id": "tray_1",
                         "device_id": "esp32-1",
-                        "ui_action": "test_watering",
+                        "ui_action": "dose_solution",
                         "duration_sec": 7,
                     },
                 },
@@ -93,7 +93,7 @@ class OpenClawMcpTests(unittest.TestCase):
                     "arguments": {
                         "zone_id": "tray_1",
                         "device_id": "esp32-1",
-                        "ui_action": "test_watering",
+                        "ui_action": "dose_solution",
                     },
                 },
             }
@@ -111,7 +111,7 @@ class OpenClawMcpTests(unittest.TestCase):
                         "operator_name": "OpenClaw",
                         "zone_id": "tray_1",
                         "device_id": "esp32-1",
-                        "ui_action": "test_watering",
+                        "ui_action": "dose_solution",
                         "duration_sec": 8,
                     },
                 },
@@ -121,7 +121,7 @@ class OpenClawMcpTests(unittest.TestCase):
         self.assertEqual(denied["error"]["message"], "invalid_action_auth_token")
         payload = allowed["result"]["content"][0]["json"]
         self.assertEqual(payload["status"], "DISPATCHED")
-        self.assertEqual(harness.mqtt.published[-1]["payload"]["step"], "open_valve")
+        self.assertEqual(harness.mqtt.published[-1]["payload"]["actuator"], "nutrient_doser")
         self.assertEqual(harness.mqtt.published[-1]["payload"]["ttl_sec"], 6)
         self.assertEqual(harness.mqtt.published[-1]["payload"]["source"], "mcp")
         command = harness.command_status(payload["command_id"])

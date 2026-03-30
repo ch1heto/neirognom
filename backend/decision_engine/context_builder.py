@@ -39,13 +39,13 @@ class DecisionContextBuilder:
             telemetry_windows=telemetry_windows,
             allowed_actions=self._allowed_actions(zone_state, global_state),
             current_state=current_state,
-            telemetry_window=telemetry_windows.get("soil_moisture", []),
+            telemetry_window=telemetry_windows.get("ph", []),
         )
 
     def _telemetry_windows(self, message: TelemetryMessage) -> dict[str, list[dict[str, Any]]]:
         start_ms = max(0, message.ts_ms - 3_600_000)
         end_ms = message.ts_ms
-        sensors = ("soil_moisture", "temperature", "tank_level", "flow_rate_ml_per_min")
+        sensors = ("ph", "ec", "water_level")
         return {
             sensor: self._telemetry_history.get_sensor_history(message.device_id, sensor, start_ms, end_ms, limit=50)
             for sensor in sensors
@@ -78,6 +78,7 @@ class DecisionContextBuilder:
                 "requested_at_ms": command.get("requested_at_ms"),
                 "lifecycle": command.get("lifecycle"),
                 "last_error": command.get("last_error"),
+                "requested_payload": command.get("requested_payload", {}),
             }
             for command in commands[:limit]
         ]
@@ -85,19 +86,28 @@ class DecisionContextBuilder:
     def _allowed_actions(self, zone_state: dict[str, Any], global_state: dict[str, Any]) -> list[LlmAllowedAction]:
         actions = [
             LlmAllowedAction(decision="no_action", actuator=None, action=None, max_duration_sec=0, description="Do nothing."),
-            LlmAllowedAction(decision="stop_zone", actuator="irrigation_valve", action="CLOSE", max_duration_sec=0, description="Close the active zone valve."),
-            LlmAllowedAction(decision="block_zone", actuator="master_pump", action="OFF", max_duration_sec=0, description="Stop shared watering hardware."),
+            LlmAllowedAction(decision="close_valve", actuator="irrigation_valve", action="CLOSE", max_duration_sec=0, description="Close the tray valve."),
         ]
-        if not global_state.get("emergency_stop"):
-            actions.append(LlmAllowedAction(decision="ventilate_zone", actuator="vent_fan", action="ON", max_duration_sec=30, description="Run ventilation for the zone."))
-        if not zone_state.get("blocked") and not zone_state.get("maintenance_mode") and not global_state.get("emergency_stop"):
+        if global_state.get("emergency_stop"):
+            return actions
+
+        if not zone_state.get("blocked") and not zone_state.get("maintenance_mode"):
             actions.append(
                 LlmAllowedAction(
-                    decision="water_zone",
-                    actuator="irrigation_sequence",
-                    action="START",
+                    decision="open_valve",
+                    actuator="irrigation_valve",
+                    action="OPEN",
                     max_duration_sec=max(0, int(zone_state.get("max_open_duration_sec") or zone_state.get("max_duration_per_run_sec") or 0)),
-                    description="Start a bounded irrigation run for the zone.",
+                    description="Open the tray valve for a bounded interval.",
+                )
+            )
+            actions.append(
+                LlmAllowedAction(
+                    decision="dose_solution",
+                    actuator="nutrient_doser",
+                    action="START",
+                    max_duration_sec=max(0, int(self._config.global_safety.max_manual_duration_sec)),
+                    description="Dose nutrient solution for a short bounded interval.",
                 )
             )
         return actions

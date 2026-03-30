@@ -22,7 +22,7 @@ def telemetry_payload(
         "timestamp": ts_ms,
         "local_timestamp": local_ts_ms if local_ts_ms is not None else ts_ms,
         "message_counter": message_counter,
-        "sensors": sensors or {"soil_moisture": 25.0, "temperature": 24.0, "tank_level": 80.0},
+        "sensors": sensors or {"ph": 6.1, "ec": 1.7, "water_level": 68.0},
         "status": {},
         "meta": {},
     }
@@ -47,7 +47,7 @@ def device_state_payload(
         "timestamp": ts_ms,
         "message_counter": message_counter,
         "connectivity": connectivity,
-        "state": state or {"pump_on": False, "valve_open": False},
+        "state": state or {"valve_open": False, "doser_active": False, "pump_on": False},
         "status": {},
         "meta": {},
     }
@@ -78,38 +78,46 @@ def presence_payload(
     }
 
 
-def llama_water_response(*, zone_id: str = "tray_1", duration_sec: int = 12, confidence: float = 0.87) -> dict[str, Any]:
+def llama_dose_response(*, zone_id: str = "tray_1", duration_sec: int = 6, dose_ml: int = 30, confidence: float = 0.87) -> dict[str, Any]:
     return {
-        "decision": "water_zone",
+        "decision": "dose_solution",
         "zone_id": zone_id,
-        "duration_sec": duration_sec,
-        "reason": "soil moisture below threshold and cooldown passed",
+        "requested_duration_sec": duration_sec,
+        "dose_ml": dose_ml,
+        "rationale": "ec and ph are outside the target band for this tray",
         "confidence": confidence,
     }
+
+
+def llama_water_response(*, zone_id: str = "tray_1", duration_sec: int = 6, confidence: float = 0.87) -> dict[str, Any]:
+    return llama_dose_response(zone_id=zone_id, duration_sec=duration_sec, confidence=confidence)
 
 
 def llama_no_action_response(*, zone_id: str = "tray_1", confidence: float = 0.92) -> dict[str, Any]:
     return {
         "decision": "no_action",
         "zone_id": zone_id,
-        "reason": "conditions are within target range",
+        "requested_duration_sec": 0,
+        "dose_ml": 0,
+        "rationale": "ph, ec, and water level are within target range",
         "confidence": confidence,
     }
 
 
 def llama_invalid_response() -> dict[str, Any]:
     return {
-        "decision": "water_zone",
+        "decision": "dose_solution",
         "zone": "tray_1",
     }
 
 
 def llama_invalid_extra_fields_response(*, zone_id: str = "tray_1") -> dict[str, Any]:
     return {
-        "decision": "water_zone",
+        "decision": "dose_solution",
         "zone_id": zone_id,
-        "duration_sec": 10,
-        "reason": "soil moisture below threshold",
+        "requested_duration_sec": 10,
+        "dose_ml": 30,
+        "rationale": "ph is below target",
         "confidence": 0.8,
         "max_duration_sec": 10,
         "description": "extra field not allowed",
@@ -118,16 +126,14 @@ def llama_invalid_extra_fields_response(*, zone_id: str = "tray_1") -> dict[str,
 
 def llama_missing_required_fields_response() -> dict[str, Any]:
     return {
-        "decision": "water_zone",
-        "actuator": "irrigation_sequence",
-        "action": "START",
-        "duration_sec": 10,
-        "reason": "missing zone_id and confidence",
+        "decision": "dose_solution",
+        "requested_duration_sec": 10,
+        "rationale": "missing zone_id and confidence",
     }
 
 
 def llama_invalid_json_response() -> str:
-    return '{"decision":"water_zone","zone_id":"tray_1",'
+    return '{"decision":"dose_solution","zone_id":"tray_1",'
 
 
 def ack_payload(

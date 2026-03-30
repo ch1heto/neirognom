@@ -1,20 +1,20 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Greenhouse Operator Console</title>
+  <title>Пульт оператора гидропоники</title>
   <style>
     :root {
-      --bg: #eef2ef;
-      --panel: #f9fbf9;
-      --line: #c8d2cc;
-      --text: #18221c;
-      --muted: #5f6d63;
-      --accent: #22543d;
-      --warn: #a16207;
-      --bad: #b91c1c;
-      --good: #166534;
+      --bg: #eef3ef;
+      --panel: #fbfdfb;
+      --line: #c7d1ca;
+      --text: #17211a;
+      --muted: #5d6b60;
+      --accent: #21523b;
+      --warn: #9a6706;
+      --bad: #b42318;
+      --good: #027a48;
     }
     * { box-sizing: border-box; }
     body {
@@ -23,16 +23,8 @@
       color: var(--text);
       font: 14px/1.45 Consolas, "Courier New", monospace;
     }
-    .page {
-      padding: 16px;
-      display: grid;
-      gap: 16px;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px;
-    }
+    .page { padding: 16px; display: grid; gap: 16px; }
+    .grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px; }
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -40,90 +32,28 @@
       padding: 14px;
       box-shadow: 0 10px 24px rgba(16, 24, 18, 0.06);
     }
-    h1, h2, h3, p { margin: 0; }
+    h1, h2, p { margin: 0; }
     h1 { font-size: 20px; }
     h2 { font-size: 15px; margin-bottom: 10px; }
-    .row, .toolbar, .operator-form, .actions {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
+    .row, .toolbar, .operator-form, .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .toolbar { justify-content: space-between; }
     .tiny { font-size: 12px; color: var(--muted); }
-    .summary {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
-    }
-    .card, .zone-card, .device-card, .command-card {
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: #fff;
-      padding: 12px;
-    }
+    .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .card, .zone-card, .device-card, .command-card { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 12px; }
     .metric { font-size: 22px; font-weight: 700; margin-top: 6px; }
-    .list {
-      display: grid;
-      gap: 10px;
-      max-height: 65vh;
-      overflow: auto;
-    }
-    .badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      font-size: 12px;
-      margin-right: 6px;
-      margin-bottom: 4px;
-    }
-    .ok { color: var(--good); border-color: rgba(22, 101, 52, 0.3); }
-    .warn { color: var(--warn); border-color: rgba(161, 98, 7, 0.3); }
-    .bad { color: var(--bad); border-color: rgba(185, 28, 28, 0.3); }
-    button, input {
-      font: inherit;
-    }
-    input {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 8px 10px;
-      background: #fff;
-      min-width: 120px;
-    }
-    button {
-      border: 1px solid var(--accent);
-      border-radius: 8px;
-      padding: 8px 10px;
-      background: var(--accent);
-      color: #fff;
-      cursor: pointer;
-    }
-    button.secondary {
-      background: #fff;
-      color: var(--text);
-      border-color: var(--line);
-    }
-    button.danger {
-      background: var(--bad);
-      border-color: var(--bad);
-    }
-    button:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-    }
-    pre {
-      margin: 8px 0 0;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    .rejection {
-      color: var(--bad);
-      margin-top: 8px;
-    }
-    @media (max-width: 1100px) {
-      .grid, .summary { grid-template-columns: 1fr; }
-    }
+    .list { display: grid; gap: 10px; max-height: 65vh; overflow: auto; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; margin-right: 6px; margin-bottom: 4px; }
+    .ok { color: var(--good); border-color: rgba(2, 122, 72, 0.3); }
+    .warn { color: var(--warn); border-color: rgba(154, 103, 6, 0.3); }
+    .bad { color: var(--bad); border-color: rgba(180, 35, 24, 0.3); }
+    button, input { font: inherit; }
+    input { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: #fff; min-width: 120px; }
+    button { border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; background: var(--accent); color: #fff; cursor: pointer; }
+    button.secondary { background: #fff; color: var(--text); border-color: var(--line); }
+    button.danger { background: var(--bad); border-color: var(--bad); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .rejection { color: var(--bad); margin-top: 8px; }
+    @media (max-width: 1100px) { .grid, .summary { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -131,47 +61,47 @@
     <section class="panel">
       <div class="toolbar">
         <div>
-          <h1>Operator Control Console</h1>
-          <p class="tiny">Manual actions go through backend validation, command journal, and MQTT dispatch.</p>
+          <h1>Пульт оператора гидропонной системы</h1>
+          <p class="tiny">Все ручные действия проходят через backend validation, safety и MQTT dispatch.</p>
         </div>
         <div class="row">
-          <button id="refreshBtn" class="secondary" type="button">Refresh</button>
-          <button id="emergencyBtn" class="danger" type="button">Emergency Stop</button>
+          <button id="refreshBtn" class="secondary" type="button">Обновить</button>
+          <button id="emergencyBtn" class="danger" type="button">Аварийная остановка</button>
         </div>
       </div>
       <div class="operator-form" style="margin-top:12px">
         <input id="operatorId" placeholder="operator_id" value="operator_ui">
-        <input id="operatorName" placeholder="operator_name" value="Operator UI">
-        <input id="defaultDuration" type="number" min="1" max="60" value="10">
-        <div class="tiny">Default seconds for test watering / pump start / valve open</div>
+        <input id="operatorName" placeholder="operator_name" value="Оператор">
+        <input id="defaultDuration" type="number" min="1" max="15" value="5">
+        <div class="tiny">Секунды по умолчанию для открытия клапана и дозирования раствора</div>
       </div>
       <div class="summary" style="margin-top:14px">
-        <div class="card"><div class="tiny">Devices</div><div id="deviceCount" class="metric">-</div></div>
-        <div class="card"><div class="tiny">Zones</div><div id="zoneCount" class="metric">-</div></div>
-        <div class="card"><div class="tiny">Active Locks</div><div id="lockCount" class="metric">-</div></div>
-        <div class="card"><div class="tiny">Active Commands</div><div id="commandCount" class="metric">-</div></div>
+        <div class="card"><div class="tiny">Устройства</div><div id="deviceCount" class="metric">-</div></div>
+        <div class="card"><div class="tiny">Поддоны</div><div id="zoneCount" class="metric">-</div></div>
+        <div class="card"><div class="tiny">Активные блокировки</div><div id="lockCount" class="metric">-</div></div>
+        <div class="card"><div class="tiny">Активные команды</div><div id="commandCount" class="metric">-</div></div>
       </div>
-      <div id="statusLine" class="tiny" style="margin-top:12px">Updated: -</div>
+      <div id="statusLine" class="tiny" style="margin-top:12px">Обновлено: -</div>
     </section>
 
     <div class="grid">
       <section class="panel">
-        <h2>Zones</h2>
+        <h2>Поддоны</h2>
         <div id="zones" class="list"></div>
       </section>
       <section class="panel">
-        <h2>Devices</h2>
+        <h2>Устройства</h2>
         <div id="devices" class="list"></div>
       </section>
     </div>
 
     <div class="grid">
       <section class="panel">
-        <h2>Safety State</h2>
+        <h2>Safety / блокировки</h2>
         <div id="locks" class="list"></div>
       </section>
       <section class="panel">
-        <h2>Command History</h2>
+        <h2>История команд</h2>
         <div id="commands" class="list"></div>
       </section>
     </div>
@@ -179,24 +109,23 @@
 
   <script>
     const fmtTs = (ts) => ts ? new Date(Number(ts)).toLocaleString() : "-";
-    const json = (value) => JSON.stringify(value ?? {}, null, 2);
     const el = (id) => document.getElementById(id);
 
     function operatorMeta() {
       return {
         operator_id: el("operatorId").value.trim() || "operator_ui",
-        operator_name: el("operatorName").value.trim() || "Operator UI",
+        operator_name: el("operatorName").value.trim() || "Оператор",
       };
     }
 
     function defaultDuration() {
-      const raw = Number(el("defaultDuration").value || 10);
-      return Number.isFinite(raw) ? Math.max(1, raw) : 10;
+      const raw = Number(el("defaultDuration").value || 5);
+      return Number.isFinite(raw) ? Math.max(1, raw) : 5;
     }
 
     function statusClass(value) {
       const normalized = String(value || "").toLowerCase();
-      if (["online", "completed", "acked", "executing"].includes(normalized)) return "ok";
+      if (["online", "completed", "acked", "executing", "running"].includes(normalized)) return "ok";
       if (["offline", "failed", "aborted", "expired"].includes(normalized)) return "bad";
       return "warn";
     }
@@ -222,12 +151,11 @@
       const active = zone.active_command;
       const last = zone.last_command;
       const locks = zone.safety_locks || [];
-      const actionButtons = [
-        ["open_valve", "Open Valve"],
-        ["close_valve", "Close Valve"],
-        ["start_pump", "Start Pump"],
-        ["stop_pump", "Stop Pump"],
-        ["test_watering", "Test Watering"],
+      const valveOpen = Boolean(zone.device_state?.valve_open);
+      const buttons = [
+        ["open_valve", "Открыть клапан"],
+        ["close_valve", "Закрыть клапан"],
+        ["dose_solution", "Дозировать раствор"],
       ].map(([action, label]) => {
         const guard = zone.actions?.[action] || { enabled: true, reasons: [] };
         const reasons = (guard.reasons || []).filter(Boolean);
@@ -239,12 +167,12 @@
           <span class="badge ${statusClass(zone.connectivity)}">${zone.connectivity || "unknown"}</span>
         </div>
         <div class="tiny">device=${zone.device_id || "-"} blocked=${String(zone.blocked)} reserved=${zone.reserved_by_execution || "-"}</div>
-        <div class="tiny">telemetry: moisture=${telemetry.soil_moisture ?? "-"} temp=${telemetry.temperature ?? "-"} tank=${telemetry.tank_level ?? "-"} flow=${telemetry.flow_rate_ml_per_min ?? "-"}</div>
-        <div class="tiny">device_state: valve_open=${String(zone.device_state?.valve_open ?? false)} pump_on=${String(zone.device_state?.pump_on ?? false)}</div>
-        <div class="tiny">locks: ${(locks.map(lock => lock.kind).join(", ")) || "-"}</div>
-        <div class="tiny">in_progress=${active ? `${active.command_id}:${active.lifecycle}` : "-"}</div>
-        <div class="tiny">last_ack=${active?.last_ack?.status || last?.last_ack?.status || "-"} last_result=${active?.last_result?.status || last?.last_result?.status || "-"}</div>
-        <div class="actions" style="margin-top:10px">${actionButtons}</div>
+        <div class="tiny">pH=${telemetry.ph ?? "-"} | EC=${telemetry.ec ?? "-"} | water_level=${telemetry.water_level ?? "-"}</div>
+        <div class="tiny">клапан=${valveOpen ? "открыт" : "закрыт"} | активная команда=${active ? `${active.command_id}:${active.lifecycle}` : "-"}</div>
+        <div class="tiny">последняя команда=${last ? `${last.command_id}:${last.lifecycle}` : "-"}</div>
+        <div class="tiny">ACK=${active?.last_ack?.status || last?.last_ack?.status || "-"} | RESULT=${active?.last_result?.status || last?.last_result?.status || "-"}</div>
+        <div class="tiny">блокировки: ${(locks.map(lock => lock.kind).join(", ")) || "-"}</div>
+        <div class="actions" style="margin-top:10px">${buttons}</div>
         <div class="rejection" data-rejection="${zone.zone_id}"></div>
       `;
       return host;
@@ -260,10 +188,10 @@
           <strong>${device.device_id}</strong>
           <span class="badge ${statusClass(device.connectivity)}">${device.connectivity || "unknown"}</span>
         </div>
-        <div class="tiny">zone=${device.zone_id || "-"} last_seen=${fmtTs(device.last_seen_ms)}</div>
+        <div class="tiny">tray=${device.zone_id || "-"} last_seen=${fmtTs(device.last_seen_ms)}</div>
         <div class="tiny">firmware=${device.firmware_version || "-"}</div>
-        <div class="tiny">telemetry: tank=${telemetry.tank_level ?? "-"} pressure=${telemetry.pressure_kpa ?? "-"} flow=${telemetry.flow_rate_ml_per_min ?? "-"}</div>
-        <div class="tiny">state: pump_on=${String(state.pump_on ?? false)} valve_open=${String(state.valve_open ?? false)}</div>
+        <div class="tiny">pH=${telemetry.ph ?? "-"} | EC=${telemetry.ec ?? "-"} | water_level=${telemetry.water_level ?? "-"}</div>
+        <div class="tiny">state: valve_open=${String(state.valve_open ?? false)} doser_active=${String(state.doser_active ?? false)}</div>
         <div class="tiny">active_command=${device.active_command ? `${device.active_command.command_id}:${device.active_command.lifecycle}` : "-"}</div>
       `;
       return host;
@@ -291,7 +219,7 @@
           <strong>${command.command_id}</strong>
           <span class="badge ${statusClass(command.lifecycle)}">${command.lifecycle}</span>
         </div>
-        <div class="tiny">zone=${command.zone_id} device=${command.device_id} by=${command.operator?.operator_name || command.requested_by}</div>
+        <div class="tiny">tray=${command.zone_id} device=${command.device_id} by=${command.operator?.operator_name || command.requested_by}</div>
         <div class="tiny">reason=${command.reason || "-"}</div>
         <div class="tiny">ack=${command.last_ack?.status || "-"} result=${command.last_result?.status || "-"} error=${command.last_error || "-"}</div>
       `;
@@ -309,7 +237,7 @@
       el("zoneCount").textContent = String(zones.length);
       el("lockCount").textContent = String((state.active_safety_locks || []).length);
       el("commandCount").textContent = String((state.active_commands || []).length);
-      el("statusLine").textContent = `Updated: ${fmtTs(overview.generated_at_ms)}`;
+      el("statusLine").textContent = `Обновлено: ${fmtTs(overview.generated_at_ms)}`;
 
       const zoneHost = el("zones");
       zoneHost.innerHTML = "";
@@ -322,12 +250,12 @@
       const lockHost = el("locks");
       lockHost.innerHTML = "";
       (state.active_safety_locks || []).forEach(lock => lockHost.appendChild(renderLock(lock)));
-      if (!(state.active_safety_locks || []).length) lockHost.innerHTML = '<div class="tiny">No active safety locks.</div>';
+      if (!(state.active_safety_locks || []).length) lockHost.innerHTML = '<div class="tiny">Нет активных блокировок.</div>';
 
       const commandHost = el("commands");
       commandHost.innerHTML = "";
       commands.forEach(command => commandHost.appendChild(renderCommand(command)));
-      if (!commands.length) commandHost.innerHTML = '<div class="tiny">No command history yet.</div>';
+      if (!commands.length) commandHost.innerHTML = '<div class="tiny">История команд пока пуста.</div>';
     }
 
     async function handleZoneAction(button) {
@@ -341,13 +269,18 @@
         ui_action: uiAction,
         duration_sec: defaultDuration(),
       };
-      const dangerous = ["open_valve", "start_pump", "test_watering"].includes(uiAction);
-      const result = await postAction(body, dangerous ? `Confirm ${uiAction} for ${zoneId}?` : "");
+      const dangerous = ["open_valve", "dose_solution"].includes(uiAction);
+      const actionLabels = {
+        open_valve: "открытие клапана",
+        close_valve: "закрытие клапана",
+        dose_solution: "дозирование раствора",
+      };
+      const result = await postAction(body, dangerous ? `Подтвердить ${actionLabels[uiAction] || uiAction} для ${zoneId}?` : "");
       if (!result) return;
       const rejection = document.querySelector(`[data-rejection="${zoneId}"]`);
       if (rejection) {
         const reasons = result.reasons || result.command?.last_error || result.command?.last_result?.error_message;
-        rejection.textContent = result.status === "ABORTED" ? `Rejected: ${Array.isArray(reasons) ? reasons.join(", ") : reasons || "unknown_reason"}` : "";
+        rejection.textContent = result.status === "ABORTED" ? `Отказ: ${Array.isArray(reasons) ? reasons.join(", ") : reasons || "unknown_reason"}` : "";
       }
       await refresh();
     }
@@ -362,10 +295,10 @@
 
     el("refreshBtn").addEventListener("click", refresh);
     el("emergencyBtn").addEventListener("click", async () => {
-      if (!window.confirm("Confirm emergency stop? This will disable automation and dispatch safe-stop commands.")) return;
+      if (!window.confirm("Подтвердить аварийную остановку? Все клапаны будут закрыты, дозаторы остановлены.")) return;
       await api("/api/operator/emergency-stop", {
         method: "POST",
-        body: JSON.stringify({ ...operatorMeta(), reason: "manual emergency stop from web ui" }),
+        body: JSON.stringify({ ...operatorMeta(), reason: "ручная аварийная остановка из web ui" }),
       });
       await refresh();
     });

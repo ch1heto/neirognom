@@ -17,7 +17,7 @@ class OperatorUiServiceTests(unittest.TestCase):
                 "operator_name": "Alice",
                 "zone_id": "tray_1",
                 "device_id": "esp32-1",
-                "ui_action": "test_watering",
+                "ui_action": "dose_solution",
                 "duration_sec": 12,
             }
         )
@@ -26,6 +26,7 @@ class OperatorUiServiceTests(unittest.TestCase):
         self.assertEqual(harness.mqtt.published[-1]["payload"]["ttl_sec"], 9)
         command = harness.command_status(result["command_id"])
         assert command is not None
+        self.assertEqual(command["requested_payload"]["actuator"], "nutrient_doser")
         self.assertEqual(command["requested_payload"]["duration_sec"], 6)
         self.assertEqual(command["metadata"]["requested_duration_sec"], 12)
         self.assertEqual(command["metadata"]["effective_duration_sec"], 6)
@@ -43,13 +44,13 @@ class OperatorUiServiceTests(unittest.TestCase):
                 "operator_name": "Alice",
                 "zone_id": "tray_1",
                 "device_id": "esp32-1",
-                "ui_action": "test_watering",
+                "ui_action": "open_valve",
                 "duration_sec": 9,
             }
         )
 
         self.assertEqual(result["status"], "DISPATCHED")
-        self.assertEqual(harness.mqtt.published[-1]["payload"]["step"], "open_valve")
+        self.assertEqual(harness.mqtt.published[-1]["payload"]["step"], "actuator_action")
         self.assertEqual(harness.mqtt.published[-1]["payload"]["ttl_sec"], 7)
         self.assertEqual(harness.mqtt.published[-1]["payload"]["source"], "operator")
         command = harness.command_status(result["command_id"])
@@ -69,7 +70,7 @@ class OperatorUiServiceTests(unittest.TestCase):
                 "operator_name": "Alice",
                 "zone_id": "tray_1",
                 "device_id": "esp32-1",
-                "ui_action": "test_watering",
+                "ui_action": "open_valve",
                 "duration_sec": 8,
             }
         )
@@ -77,24 +78,25 @@ class OperatorUiServiceTests(unittest.TestCase):
         self.assertEqual(result["status"], "ABORTED")
         self.assertIn("device_offline", result["reasons"])
 
-    def test_list_devices_zones_exposes_locks_and_action_guards(self) -> None:
+    def test_list_devices_zones_exposes_hydroponic_telemetry_and_action_guards(self) -> None:
         harness = BackendTestHarness()
         harness.seed_device_state(device_state_payload())
         harness.ingest_telemetry(
             telemetry_payload(
                 message_id="msg-operator-locks-0001",
                 trace_id="trace-operator-locks-0001",
-                sensors={"soil_moisture": 26.0, "temperature": 23.0, "tank_level": 0.0},
+                sensors={"ph": 5.4, "ec": 0.9, "water_level": 8.0},
             )
         )
 
         snapshot = harness.operator.list_devices_zones()
         zone = next(item for item in snapshot["zones"] if item["zone_id"] == "tray_1")
-        safety_locks = zone["safety_locks"]
 
-        self.assertTrue(any(lock["kind"] == "empty_tank" for lock in safety_locks))
-        self.assertFalse(zone["actions"]["test_watering"]["enabled"])
-        self.assertTrue(any("water_source_unavailable" in reason or "global:empty_tank" in reason for reason in zone["actions"]["test_watering"]["reasons"]))
+        self.assertEqual(zone["telemetry"]["ph"], 5.4)
+        self.assertEqual(zone["telemetry"]["ec"], 0.9)
+        self.assertEqual(zone["telemetry"]["water_level"], 8.0)
+        self.assertFalse(zone["actions"]["dose_solution"]["enabled"])
+        self.assertIn("water_level_too_low", zone["actions"]["dose_solution"]["reasons"])
 
     def test_emergency_stop_creates_lock_and_safe_stop_commands(self) -> None:
         harness = BackendTestHarness()
@@ -107,7 +109,7 @@ class OperatorUiServiceTests(unittest.TestCase):
         self.assertTrue(any(lock["kind"] == "manual_emergency_stop" for lock in locks))
         self.assertFalse(harness.store.get_automation_flags()["automation_enabled"]["enabled"])
         self.assertTrue(any(item["payload"]["action"] == "CLOSE" for item in harness.mqtt.published))
-        self.assertTrue(any(item["payload"]["action"] == "OFF" for item in harness.mqtt.published))
+        self.assertTrue(any(item["payload"]["actuator"] == "nutrient_doser" and item["payload"]["action"] == "STOP" for item in harness.mqtt.published))
 
 
 if __name__ == "__main__":

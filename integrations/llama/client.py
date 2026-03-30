@@ -62,18 +62,20 @@ class LlamaDecisionClient:
     @staticmethod
     def _system_prompt() -> str:
         return (
-            "You are a greenhouse reasoning engine. "
+            "You are a hydroponic tray reasoning engine. "
             "Return exactly one JSON object and nothing else. "
             "Do not output markdown, code fences, prose, comments, or explanations. "
             "The JSON must match this exact schema with no extra fields: "
-            '{"decision":"no_action|water_zone|stop_zone|ventilate_zone|block_zone",'
-            '"zone_id":"string","actuator":"string|null","action":"string|null",'
-            '"duration_sec":"integer|null","reason":"string","confidence":"number"} '
-            "Required fields are: decision, zone_id, reason, confidence. "
-            "Optional fields are: actuator, action, duration_sec. "
+            '{"decision":"no_action|open_valve|close_valve|dose_solution",'
+            '"zone_id":"string","requested_duration_sec":"integer|null","dose_ml":"integer|null",'
+            '"rationale":"string","confidence":"number"} '
+            "Required fields are: decision, zone_id, rationale, confidence. "
+            "Optional fields are: requested_duration_sec, dose_ml. "
             "Do not use alternative field names. "
-            "Do not include fields like max_duration_sec, description, notes, or metadata. "
-            "If decision is no_action, you must still include zone_id, reason, and confidence."
+            "Do not include fields like actuator, action, duration_sec, max_duration_sec, reason, description, notes, or metadata. "
+            "If decision is no_action, you must still include zone_id, rationale, and confidence. "
+            "Use dose_solution only when dosing nutrient solution is justified by ph/ec context. "
+            "Use open_valve or close_valve only for valve control decisions."
         )
 
     @staticmethod
