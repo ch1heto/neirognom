@@ -164,8 +164,32 @@ class DecisionEngine:
             ph_value = float(ph)
             if ph_min_critical is not None and ph_value <= ph_min_critical:
                 self._record_alert(message, "critical", "ph", f"pH critically low: {ph_value:.2f} <= {ph_min_critical:.2f}")
+                if zone_state.get("device_state", {}).get("valve_open") and proposal is None:
+                    proposal = ActionProposal(
+                        message.trace_id,
+                        message.device_id,
+                        message.zone_id,
+                        "irrigation_valve",
+                        "CLOSE",
+                        0,
+                        DecisionOrigin.DETERMINISTIC,
+                        "pH critically low",
+                        message.ts_ms,
+                    )
             elif ph_max_critical is not None and ph_value >= ph_max_critical:
                 self._record_alert(message, "critical", "ph", f"pH critically high: {ph_value:.2f} >= {ph_max_critical:.2f}")
+                if zone_state.get("device_state", {}).get("valve_open") and proposal is None:
+                    proposal = ActionProposal(
+                        message.trace_id,
+                        message.device_id,
+                        message.zone_id,
+                        "irrigation_valve",
+                        "CLOSE",
+                        0,
+                        DecisionOrigin.DETERMINISTIC,
+                        "pH critically high",
+                        message.ts_ms,
+                    )
 
         ec = telemetry.get("ec")
         ec_min_critical = self._threshold_value("ec", "min_critical", "critical_low", None)
@@ -174,8 +198,32 @@ class DecisionEngine:
             ec_value = float(ec)
             if ec_min_critical is not None and ec_value <= ec_min_critical:
                 self._record_alert(message, "critical", "ec", f"EC critically low: {ec_value:.2f} <= {ec_min_critical:.2f}")
+                if zone_state.get("device_state", {}).get("valve_open") and proposal is None:
+                    proposal = ActionProposal(
+                        message.trace_id,
+                        message.device_id,
+                        message.zone_id,
+                        "irrigation_valve",
+                        "CLOSE",
+                        0,
+                        DecisionOrigin.DETERMINISTIC,
+                        "EC critically low",
+                        message.ts_ms,
+                    )
             elif ec_max_critical is not None and ec_value >= ec_max_critical:
                 self._record_alert(message, "critical", "ec", f"EC critically high: {ec_value:.2f} >= {ec_max_critical:.2f}")
+                if zone_state.get("device_state", {}).get("valve_open") and proposal is None:
+                    proposal = ActionProposal(
+                        message.trace_id,
+                        message.device_id,
+                        message.zone_id,
+                        "irrigation_valve",
+                        "CLOSE",
+                        0,
+                        DecisionOrigin.DETERMINISTIC,
+                        "EC critically high",
+                        message.ts_ms,
+                    )
 
         return proposal
 

@@ -78,10 +78,10 @@ class LlamaDecisionClient:
             "Optional fields: requested_duration_sec, dose_ml. "
             "Do not use alternate field names like reason, duration_sec, actuator, action, metadata, notes, description, or max_duration_sec. "
             "If decision is no_action, still include zone_id, rationale, and confidence. "
-            "Use requested_duration_sec only for open_valve. "
+            "You MUST provide a valid requested_duration_sec (in seconds) for both open_valve and dose_solution to specify how long the pump/valve should run. "
             "Use dose_ml only for dose_solution when nutrient dosing is justified by pH or EC context. "
             "EXAMPLE OUTPUT: "
-            '{"decision":"open_valve","zone_id":"tray_1","requested_duration_sec":30,"dose_ml":null,"rationale":"Water level is safe and the tray needs irrigation.","confidence":0.95}'
+            '{"decision":"dose_solution","zone_id":"tray_1","requested_duration_sec":5,"dose_ml":25,"rationale":"EC is below the grow-map target and nutrient dosing is required.","confidence":0.95}'
         )
 
     @staticmethod
