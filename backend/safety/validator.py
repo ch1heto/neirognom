@@ -140,5 +140,10 @@ class SafetyValidator:
                 "duration_sec": proposal.duration_sec,
                 "metadata": proposal.metadata,
             },
-            metadata={},
+            metadata={
+                "nonce": f"nonce-{uuid.uuid4().hex[:16]}",
+                "device_binding": proposal.device_id,
+                "zone_binding": proposal.zone_id,
+                "replay_window_ms": self._config.global_safety.command_ttl_sec * 1000,
+            },
         )

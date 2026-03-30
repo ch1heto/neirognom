@@ -66,6 +66,7 @@ class StateStore(Protocol):
     def get_automation_flags(self) -> dict[str, dict[str, Any]]: ...
     def get_active_alarms(self) -> list[dict[str, Any]]: ...
     def record_alarm(self, alert: AlertEvent) -> dict[str, Any]: ...
+    def clear_alarm(self, alarm_id: str, cleared_at_ms: int | None = None) -> dict[str, Any] | None: ...
     def append_audit_log(self, audit: AuditLogRecord) -> dict[str, Any]: ...
     def note_incident(self, category: str, payload: dict[str, Any]) -> None: ...
     def count_active_irrigation_executions(self) -> int: ...
@@ -338,6 +339,14 @@ class MemoryStateStore:
         self._alarms[alert.alert_id] = record
         return deepcopy(record)
 
+    def clear_alarm(self, alarm_id: str, cleared_at_ms: int | None = None) -> dict[str, Any] | None:
+        record = self._alarms.get(alarm_id)
+        if record is None:
+            return None
+        record["active"] = False
+        record["cleared_at_ms"] = int(cleared_at_ms or _now_ms())
+        return deepcopy(record)
+
     def append_audit_log(self, audit: AuditLogRecord) -> dict[str, Any]:
         record = audit.model_dump()
         self._audit_logs.append(record)
@@ -589,6 +598,13 @@ class SQLiteStateStore(MemoryStateStore):
     def record_alarm(self, alert: AlertEvent) -> dict[str, Any]:
         record = super().record_alarm(alert)
         self._upsert_payload("alarms", "alarm_id", alert.alert_id, record, alert.created_at_ms, {"active": 1})
+        return record
+
+    def clear_alarm(self, alarm_id: str, cleared_at_ms: int | None = None) -> dict[str, Any] | None:
+        record = super().clear_alarm(alarm_id, cleared_at_ms)
+        if record is None:
+            return None
+        self._upsert_payload("alarms", "alarm_id", alarm_id, record, int(record["cleared_at_ms"]), {"active": 0})
         return record
 
     def append_audit_log(self, audit: AuditLogRecord) -> dict[str, Any]:

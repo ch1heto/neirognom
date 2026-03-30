@@ -9,9 +9,11 @@ import paho.mqtt.client as mqtt
 from backend.config import load_backend_config
 from backend.dispatcher.service import CommandDispatcher
 from backend.domain.models import ManualLeaseRecord
+from backend.security.monitor import SecurityMonitor
 from backend.safety.validator import ActionProposal, SafetyValidator
+from backend.state.influx import MemoryTelemetryHistoryStore
 from backend.state.store import MemoryStateStore
-from shared.contracts.messages import CommandLifecycle, DecisionOrigin, DeviceConnectivity, DeviceStateMessage, TelemetryMessage
+from shared.contracts.messages import CommandAck, CommandLifecycle, CommandResult, DecisionOrigin, DeviceConnectivity, DeviceStateMessage, TelemetryMessage
 
 
 class DummyPublishResult:
@@ -36,7 +38,9 @@ class BackendArchitectureTests(unittest.TestCase):
         mqtt_client = DummyMqttClient()
         validator = SafetyValidator(config)
         dispatcher = CommandDispatcher(mqtt_client, config, store, validator)
-        return config, store, mqtt_client, validator, dispatcher
+        telemetry_history = MemoryTelemetryHistoryStore()
+        security_monitor = SecurityMonitor(config, store, telemetry_history)
+        return config, store, mqtt_client, validator, dispatcher, telemetry_history, security_monitor
 
     def test_config_uses_sqlite_and_influx_boundaries(self) -> None:
         with mock.patch.dict(
@@ -62,7 +66,7 @@ class BackendArchitectureTests(unittest.TestCase):
         self.assertEqual(config.influx.bucket, "telemetry")
 
     def test_safety_validator_blocks_leak_cooldown_and_manual_lease(self) -> None:
-        _, store, _, validator, _ = self._build_stack()
+        _, store, _, validator, _, _, _ = self._build_stack()
         zone = store.get_zone_state("tray_1")
         zone["telemetry"] = {"leak": True}
         zone["last_watering_at_ms"] = 10_000
@@ -99,7 +103,7 @@ class BackendArchitectureTests(unittest.TestCase):
         self.assertIn("manual_lease_active", decision.reasons)
 
     def test_dispatcher_creates_idempotent_irrigation_execution(self) -> None:
-        _, store, mqtt_client, _, dispatcher = self._build_stack()
+        _, store, mqtt_client, _, dispatcher, _, _ = self._build_stack()
         proposal = ActionProposal(
             trace_id="trace-12345678",
             device_id="esp32-1",
@@ -121,12 +125,14 @@ class BackendArchitectureTests(unittest.TestCase):
         self.assertTrue(second["idempotent"])
         self.assertEqual(len(mqtt_client.published), 1)
         self.assertEqual(mqtt_client.published[0]["payload"]["step"], "open_valve")
+        self.assertIn("nonce", mqtt_client.published[0]["payload"])
+        self.assertIn("safety_constraints", mqtt_client.published[0]["payload"])
         self.assertEqual(status["lifecycle"], CommandLifecycle.DISPATCHED.value)
         self.assertEqual(status["execution"]["phase"], "OPEN_VALVE")
         self.assertEqual(store.get_zone_state("tray_1")["reserved_by_execution"], status["execution"]["execution_id"])
 
     def test_expired_command_transitions_to_expired_and_safe_stop(self) -> None:
-        _, store, mqtt_client, _, dispatcher = self._build_stack()
+        _, store, mqtt_client, _, dispatcher, _, _ = self._build_stack()
         dispatcher.dispatch_proposal(
             ActionProposal(
                 trace_id="trace-12345679",
@@ -151,7 +157,7 @@ class BackendArchitectureTests(unittest.TestCase):
         self.assertEqual(mqtt_client.published[-1]["payload"]["step"], "stop_pump")
 
     def test_recovery_aborts_active_execution_when_device_state_is_unsafe(self) -> None:
-        _, store, mqtt_client, _, dispatcher = self._build_stack()
+        _, store, mqtt_client, _, dispatcher, _, _ = self._build_stack()
         requested_at_ms = int(time.time() * 1000)
         dispatcher.dispatch_proposal(
             ActionProposal(
@@ -185,6 +191,129 @@ class BackendArchitectureTests(unittest.TestCase):
         self.assertEqual(status["lifecycle"], CommandLifecycle.ABORTED.value)
         self.assertGreaterEqual(len(mqtt_client.published), 2)
         self.assertEqual(mqtt_client.published[-1]["payload"]["step"], "stop_pump")
+
+    def test_ack_rejects_unknown_command_and_mismatched_device(self) -> None:
+        _, store, mqtt_client, _, dispatcher, _, _ = self._build_stack()
+        proposal = ActionProposal(
+            trace_id="trace-ackcheck1",
+            device_id="esp32-1",
+            zone_id="tray_1",
+            actuator="irrigation_sequence",
+            action="START",
+            duration_sec=5,
+            origin=DecisionOrigin.OPERATOR,
+            reason="manual watering",
+            requested_at_ms=100_000,
+            command_id="cmd-ackcheck",
+        )
+        dispatcher.dispatch_proposal(proposal)
+        status_before = store.get_command_status("cmd-ackcheck")
+
+        unknown = dispatcher.handle_ack(
+            CommandAck(
+                message_id="msg-ack-unknown",
+                trace_id="trace-ack-unknown",
+                command_id="cmd-missing",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                status="acked",
+                local_timestamp_ms=100_100,
+                observed_state={},
+            )
+        )
+        mismatched = dispatcher.handle_ack(
+            CommandAck(
+                message_id="msg-ack-baddev",
+                trace_id="trace-ack-baddev",
+                command_id="cmd-ackcheck",
+                execution_id=status_before["execution"]["execution_id"],
+                step="open_valve",
+                device_id="esp32-other",
+                zone_id="tray_1",
+                status="acked",
+                local_timestamp_ms=100_100,
+                observed_state={},
+            )
+        )
+
+        status_after = store.get_command_status("cmd-ackcheck")
+        self.assertIsNone(unknown)
+        self.assertIsNone(mismatched)
+        self.assertEqual(status_after["lifecycle"], status_before["lifecycle"])
+        self.assertGreaterEqual(len(store._audit_logs), 3)
+
+    def test_result_rejects_malformed_transition(self) -> None:
+        _, store, _, _, dispatcher, _, _ = self._build_stack()
+        dispatcher.dispatch_proposal(
+            ActionProposal(
+                trace_id="trace-badresult",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                actuator="irrigation_sequence",
+                action="START",
+                duration_sec=5,
+                origin=DecisionOrigin.OPERATOR,
+                reason="manual watering",
+                requested_at_ms=100_000,
+                command_id="cmd-badresult",
+            )
+        )
+        status_before = store.get_command_status("cmd-badresult")
+        rejected = dispatcher.handle_result(
+            CommandResult(
+                message_id="msg-result-1",
+                trace_id="trace-badresult",
+                command_id="cmd-badresult",
+                execution_id=status_before["execution"]["execution_id"],
+                step="stop_pump",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                status="completed",
+                local_timestamp_ms=100_100,
+                observed_state={},
+                metrics={},
+            )
+        )
+        status_after = store.get_command_status("cmd-badresult")
+        self.assertIsNone(rejected)
+        self.assertEqual(status_after["lifecycle"], CommandLifecycle.DISPATCHED.value)
+
+    def test_security_monitor_sets_stale_heartbeat_lock(self) -> None:
+        _, store, _, _, _, telemetry_history, security_monitor = self._build_stack()
+        stale_at = int(time.time() * 1000) - 200_000
+        store.write_device_state(
+            DeviceStateMessage(
+                message_id="msg-state-stale",
+                trace_id="trace-state-stale",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                ts_ms=stale_at,
+                connectivity=DeviceConnectivity.ONLINE,
+                state={"pump_on": False, "valve_open": False},
+            )
+        )
+        security_monitor.sweep(now_ms=stale_at + 200_000)
+        locks = store.get_active_safety_locks("device", "esp32-1")
+        alarms = store.get_active_alarms()
+        self.assertTrue(any(lock["kind"] == "stale_heartbeat" for lock in locks))
+        self.assertTrue(any(alarm["category"] == "stale_heartbeat" for alarm in alarms))
+
+    def test_security_monitor_flags_flow_anomaly_from_history(self) -> None:
+        _, store, _, _, _, telemetry_history, security_monitor = self._build_stack()
+        message = TelemetryMessage.model_validate(
+            {
+                "message_id": "msg-flow-anomaly",
+                "trace_id": "trace-flow-anomaly",
+                "device_id": "esp32-1",
+                "zone_id": "tray_1",
+                "ts_ms": 1000,
+                "local_ts_ms": 1000,
+                "sensors": {"flow_rate_ml_per_min": 120.0, "tank_level": 90.0},
+            }
+        )
+        telemetry_history.write_telemetry(message)
+        security_monitor.process_telemetry(message)
+        self.assertTrue(any(lock["kind"] == "flow_anomaly" for lock in store.get_active_safety_locks("zone", "tray_1")))
 
     def test_telemetry_contract_requires_zone_and_device(self) -> None:
         message = TelemetryMessage.model_validate(

@@ -57,6 +57,16 @@ class DeviceStateMessage(StrictModel):
     state: dict[str, Any] = Field(default_factory=dict)
 
 
+class SafetyConstraints(StrictModel):
+    require_backend_safety: bool = True
+    reject_if_offline: bool = True
+    reject_if_stale_heartbeat: bool = True
+    reject_if_leak_suspected: bool = True
+    reject_if_empty_tank: bool = True
+    local_hard_max_duration_ms: int = Field(ge=0)
+    allowed_runtime_window_ms: int = Field(ge=0)
+
+
 class ActuatorCommandMessage(StrictModel):
     message_id: str = Field(min_length=8, max_length=128)
     trace_id: str = Field(min_length=8, max_length=128)
@@ -67,9 +77,11 @@ class ActuatorCommandMessage(StrictModel):
     actuator: str = Field(min_length=1, max_length=64)
     action: str = Field(min_length=1, max_length=64)
     step: str = Field(min_length=1, max_length=64)
-    created_at_ms: int = Field(ge=0)
+    issued_at_ms: int = Field(ge=0)
     expires_at_ms: int = Field(ge=0)
+    nonce: str = Field(min_length=8, max_length=128)
     max_duration_ms: int = Field(ge=0)
+    safety_constraints: SafetyConstraints
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -81,9 +93,11 @@ class CommandAck(StrictModel):
     step: str | None = None
     device_id: str = Field(min_length=1, max_length=64)
     zone_id: str = Field(min_length=1, max_length=64)
-    state: Literal["queued", "received", "acked", "running", "failed", "expired"]
-    acked_at_ms: int = Field(ge=0)
-    details: str = ""
+    status: Literal["received", "acked", "running", "rejected", "failed", "expired"]
+    local_timestamp_ms: int = Field(ge=0)
+    observed_state: dict[str, Any] = Field(default_factory=dict)
+    error_code: str | None = None
+    error_message: str = ""
 
 
 class CommandResult(StrictModel):
@@ -94,10 +108,12 @@ class CommandResult(StrictModel):
     step: str | None = None
     device_id: str = Field(min_length=1, max_length=64)
     zone_id: str = Field(min_length=1, max_length=64)
-    final_state: Literal["completed", "failed", "expired", "aborted"]
-    result_at_ms: int = Field(ge=0)
+    status: Literal["completed", "failed", "expired", "aborted"]
+    local_timestamp_ms: int = Field(ge=0)
+    observed_state: dict[str, Any] = Field(default_factory=dict)
     metrics: dict[str, Any] = Field(default_factory=dict)
-    details: str = ""
+    error_code: str | None = None
+    error_message: str = ""
 
 
 class SafetyDecision(StrictModel):

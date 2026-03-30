@@ -13,7 +13,7 @@ from backend.domain.models import AuditLogRecord, CommandExecutionRecord, Execut
 from backend.safety.validator import ActionProposal, SafetyValidator
 from backend.state.store import StateStore
 from mqtt.topics import command_execute_topic
-from shared.contracts.messages import ActuatorCommandMessage, CommandAck, CommandLifecycle, CommandResult
+from shared.contracts.messages import ActuatorCommandMessage, CommandAck, CommandLifecycle, CommandResult, SafetyConstraints
 
 
 log = logging.getLogger("backend.execution")
@@ -108,30 +108,69 @@ class IrrigationOrchestrator:
     def handle_ack(self, ack: CommandAck) -> dict[str, Any] | None:
         command = self._store.get_command(ack.command_id)
         if command is None:
+            self._reject_protocol_message("ACK", ack.trace_id, ack.command_id, ack.device_id, ack.zone_id, "unknown_command")
             return None
         execution_id = ack.execution_id or command.get("current_execution_id")
         if not execution_id:
+            self._reject_protocol_message("ACK", ack.trace_id, ack.command_id, ack.device_id, ack.zone_id, "missing_execution_binding")
             return None
-        lifecycle = CommandLifecycle.ACKED if ack.state in {"received", "acked"} else CommandLifecycle.EXECUTING if ack.state == "running" else CommandLifecycle.FAILED if ack.state == "failed" else CommandLifecycle.EXPIRED if ack.state == "expired" else CommandLifecycle.DISPATCHED
+        execution = self._store.get_execution(execution_id)
+        if execution is None:
+            self._reject_protocol_message("ACK", ack.trace_id, ack.command_id, ack.device_id, ack.zone_id, "unknown_execution")
+            return None
+        if not self._validate_command_binding(command, execution, ack.device_id, ack.zone_id, ack.execution_id, ack.step):
+            self._reject_protocol_message("ACK", ack.trace_id, ack.command_id, ack.device_id, ack.zone_id, "binding_mismatch")
+            return None
+        lifecycle = {
+            "received": CommandLifecycle.ACKED,
+            "acked": CommandLifecycle.ACKED,
+            "running": CommandLifecycle.EXECUTING,
+            "failed": CommandLifecycle.FAILED,
+            "expired": CommandLifecycle.EXPIRED,
+            "rejected": CommandLifecycle.ABORTED,
+        }[ack.status]
+        if not self._is_valid_transition(current_lifecycle=execution["lifecycle"], next_lifecycle=lifecycle, message_kind="ACK"):
+            self._reject_protocol_message("ACK", ack.trace_id, ack.command_id, ack.device_id, ack.zone_id, f"malformed_transition:{execution['lifecycle']}->{lifecycle.value}")
+            return None
         self._store.update_command(ack.command_id, lifecycle=lifecycle)
-        updated = self._store.update_execution(execution_id, lifecycle=lifecycle, updated_at_ms=ack.acked_at_ms, result_payload_update={"last_ack": ack.model_dump()})
-        self._audit(ack.trace_id, "COMMAND_ACK", "device acknowledged command", ack.command_id, execution_id, ack.device_id, ack.zone_id, {"state": ack.state, "details": ack.details})
+        updated = self._store.update_execution(
+            execution_id,
+            lifecycle=lifecycle,
+            updated_at_ms=ack.local_timestamp_ms,
+            result_payload_update={"last_ack": ack.model_dump(), "observed_state": ack.observed_state},
+        )
+        self._audit(ack.trace_id, "COMMAND_ACK", "device acknowledged command", ack.command_id, execution_id, ack.device_id, ack.zone_id, {"status": ack.status, "error_code": ack.error_code, "error_message": ack.error_message})
         return updated
 
     def handle_result(self, result: CommandResult) -> dict[str, Any] | None:
         command = self._store.get_command(result.command_id)
         if command is None:
+            self._reject_protocol_message("RESULT", result.trace_id, result.command_id, result.device_id, result.zone_id, "unknown_command")
             return None
         execution_id = result.execution_id or command.get("current_execution_id")
         if not execution_id:
+            self._reject_protocol_message("RESULT", result.trace_id, result.command_id, result.device_id, result.zone_id, "missing_execution_binding")
             return None
         execution = self._store.get_execution(execution_id)
         if execution is None:
+            self._reject_protocol_message("RESULT", result.trace_id, result.command_id, result.device_id, result.zone_id, "unknown_execution")
             return None
-        self._audit(result.trace_id, "COMMAND_RESULT", "device returned result", result.command_id, execution_id, result.device_id, result.zone_id, {"step": execution.get("active_step"), "final_state": result.final_state, "metrics": result.metrics})
-        if result.final_state in {"failed", "expired", "aborted"}:
-            terminal = CommandLifecycle.EXPIRED if result.final_state == "expired" else CommandLifecycle.ABORTED
-            self._begin_abort(result.command_id, execution_id, result.details or result.final_state, terminal_lifecycle=terminal)
+        if not self._validate_command_binding(command, execution, result.device_id, result.zone_id, result.execution_id, result.step):
+            self._reject_protocol_message("RESULT", result.trace_id, result.command_id, result.device_id, result.zone_id, "binding_mismatch")
+            return None
+        next_lifecycle = {
+            "completed": CommandLifecycle.COMPLETED,
+            "failed": CommandLifecycle.FAILED,
+            "expired": CommandLifecycle.EXPIRED,
+            "aborted": CommandLifecycle.ABORTED,
+        }[result.status]
+        if not self._is_valid_transition(current_lifecycle=execution["lifecycle"], next_lifecycle=next_lifecycle, message_kind="RESULT"):
+            self._reject_protocol_message("RESULT", result.trace_id, result.command_id, result.device_id, result.zone_id, f"malformed_transition:{execution['lifecycle']}->{next_lifecycle.value}")
+            return None
+        self._audit(result.trace_id, "COMMAND_RESULT", "device returned result", result.command_id, execution_id, result.device_id, result.zone_id, {"step": execution.get("active_step"), "status": result.status, "metrics": result.metrics, "error_code": result.error_code})
+        if result.status in {"failed", "expired", "aborted"}:
+            terminal = CommandLifecycle.EXPIRED if result.status == "expired" else CommandLifecycle.ABORTED
+            self._begin_abort(result.command_id, execution_id, result.error_message or result.status, terminal_lifecycle=terminal)
             return self._store.get_execution(execution_id)
 
         if execution.get("metadata", {}).get("aborting"):
@@ -156,6 +195,9 @@ class IrrigationOrchestrator:
             if now_ms >= int(command["expires_at_ms"]):
                 self._expire(command["command_id"], command.get("current_execution_id"))
         for execution in self._store.list_active_executions():
+            if self._has_fail_safe_lock(execution["device_id"], execution["zone_id"]):
+                self._begin_abort(execution["command_id"], execution["execution_id"], "active_safety_lock")
+                continue
             phase = execution["phase"]
             if execution.get("metadata", {}).get("aborting") and phase == ExecutionPhase.VERIFY_SAFE_STOP.value and int(execution.get("phase_deadline_ms") or 0) <= now_ms:
                 self._finalize_abort(execution["command_id"], execution["execution_id"], "safe stop verified")
@@ -175,17 +217,17 @@ class IrrigationOrchestrator:
         step = execution.get("active_step")
         zone = self._store.get_zone_state(execution["zone_id"])
         if step == "actuator_action":
-            self._store.update_execution(execution_id, lifecycle=CommandLifecycle.COMPLETED, phase=ExecutionPhase.FINISHED, updated_at_ms=result.result_at_ms, result_payload_update={"completed_at_ms": result.result_at_ms, "details": result.details})
+            self._store.update_execution(execution_id, lifecycle=CommandLifecycle.COMPLETED, phase=ExecutionPhase.FINISHED, updated_at_ms=result.local_timestamp_ms, result_payload_update={"completed_at_ms": result.local_timestamp_ms, "details": result.error_message, "observed_state": result.observed_state})
             self._store.update_command(command_id, lifecycle=CommandLifecycle.COMPLETED)
             return self._store.get_execution(execution_id)
         if step == "open_valve":
-            return self._store.update_execution(execution_id, lifecycle=CommandLifecycle.EXECUTING, phase=ExecutionPhase.WAIT_SETTLE_DELAY, updated_at_ms=result.result_at_ms, phase_deadline_ms=result.result_at_ms + int(zone.get("settle_delay_ms") or 0), result_payload_update={"open_valve_at_ms": result.result_at_ms})
+            return self._store.update_execution(execution_id, lifecycle=CommandLifecycle.EXECUTING, phase=ExecutionPhase.WAIT_SETTLE_DELAY, updated_at_ms=result.local_timestamp_ms, phase_deadline_ms=result.local_timestamp_ms + int(zone.get("settle_delay_ms") or 0), result_payload_update={"open_valve_at_ms": result.local_timestamp_ms, "observed_state": result.observed_state})
         if step == "start_pump":
-            return self._store.update_execution(execution_id, lifecycle=CommandLifecycle.EXECUTING, phase=ExecutionPhase.CONFIRM_FLOW, updated_at_ms=result.result_at_ms, phase_deadline_ms=result.result_at_ms + int(zone.get("flow_confirm_timeout_ms") or 0), result_payload_update={"start_pump_at_ms": result.result_at_ms})
+            return self._store.update_execution(execution_id, lifecycle=CommandLifecycle.EXECUTING, phase=ExecutionPhase.CONFIRM_FLOW, updated_at_ms=result.local_timestamp_ms, phase_deadline_ms=result.local_timestamp_ms + int(zone.get("flow_confirm_timeout_ms") or 0), result_payload_update={"start_pump_at_ms": result.local_timestamp_ms, "observed_state": result.observed_state})
         if step == "stop_pump":
             return self._publish_step(command_id, execution_id, "close_valve", "irrigation_valve", "CLOSE", 0, {})
         if step == "close_valve":
-            self._store.update_execution(execution_id, lifecycle=CommandLifecycle.EXECUTING, phase=ExecutionPhase.VERIFY_SAFE_STOP, updated_at_ms=result.result_at_ms, phase_deadline_ms=result.result_at_ms + 1000, result_payload_update={"close_valve_at_ms": result.result_at_ms})
+            self._store.update_execution(execution_id, lifecycle=CommandLifecycle.EXECUTING, phase=ExecutionPhase.VERIFY_SAFE_STOP, updated_at_ms=result.local_timestamp_ms, phase_deadline_ms=result.local_timestamp_ms + 1000, result_payload_update={"close_valve_at_ms": result.local_timestamp_ms, "observed_state": result.observed_state})
             return self._store.get_execution(execution_id)
         return self._store.get_execution(execution_id)
 
@@ -194,7 +236,7 @@ class IrrigationOrchestrator:
         if step == "stop_pump":
             return self._publish_step(execution["command_id"], execution["execution_id"], "close_valve", "irrigation_valve", "CLOSE", 0, {})
         if step == "close_valve":
-            return self._finalize_abort(execution["command_id"], execution["execution_id"], result.details or "aborted")
+            return self._finalize_abort(execution["command_id"], execution["execution_id"], result.error_message or "aborted")
         return self._store.get_execution(execution["execution_id"])
 
     def _publish_step(self, command_id: str, execution_id: str, step: str, actuator: str, action: str, max_duration_ms: int, parameters: dict[str, Any]) -> dict[str, Any]:
@@ -212,9 +254,14 @@ class IrrigationOrchestrator:
             actuator=actuator,
             action=action,
             step=step,
-            created_at_ms=int(time.time() * 1000),
+            issued_at_ms=int(time.time() * 1000),
             expires_at_ms=int(command["expires_at_ms"]),
+            nonce=str(command.get("metadata", {}).get("nonce") or f"nonce-{uuid.uuid4().hex[:16]}"),
             max_duration_ms=max_duration_ms,
+            safety_constraints=SafetyConstraints(
+                local_hard_max_duration_ms=max_duration_ms or int(self._config.global_safety.master_pump_timeout_sec * 1000),
+                allowed_runtime_window_ms=max(0, int(command["expires_at_ms"]) - int(time.time() * 1000)),
+            ),
             parameters=parameters,
         )
         result = self._mqtt.publish(command_execute_topic(command["device_id"]), json.dumps(message.model_dump(), ensure_ascii=False), qos=self._config.mqtt.qos_default)
@@ -223,7 +270,7 @@ class IrrigationOrchestrator:
             lifecycle = CommandLifecycle(execution.get("metadata", {}).get("terminal_lifecycle") or command["lifecycle"])
         phase = self._phase_for_step(step)
         self._store.update_command(command_id, lifecycle=lifecycle, requested_payload_update={"last_step": step})
-        self._store.update_execution(execution_id, lifecycle=lifecycle, phase=phase, active_step=step, step_index=int(execution.get("step_index") or 0) + 1, updated_at_ms=message.created_at_ms, result_payload_update={"last_publish_at_ms": message.created_at_ms, "mqtt_rc": result.rc})
+        self._store.update_execution(execution_id, lifecycle=lifecycle, phase=phase, active_step=step, step_index=int(execution.get("step_index") or 0) + 1, updated_at_ms=message.issued_at_ms, result_payload_update={"last_publish_at_ms": message.issued_at_ms, "mqtt_rc": result.rc})
         self._audit(command["trace_id"], "COMMAND_PUBLISH", "published actuator step", command_id, execution_id, command["device_id"], command["zone_id"], {"step": step, "actuator": actuator, "action": action, "mqtt_rc": result.rc})
         return {"status": lifecycle.value, "command_id": command_id, "execution_id": execution_id, "step": step}
 
@@ -328,6 +375,76 @@ class IrrigationOrchestrator:
         else:
             delivered = float(execution.get("delivered_volume_ml") or 0.0)
         self._store.update_execution(execution["execution_id"], delivered_volume_ml=delivered, metadata_update={"last_flow_ts_ms": telemetry["ts_ms"]}, updated_at_ms=int(telemetry["ts_ms"]))
+
+    def _validate_command_binding(
+        self,
+        command: dict[str, Any],
+        execution: dict[str, Any],
+        device_id: str,
+        zone_id: str,
+        execution_id: str | None,
+        step: str | None,
+    ) -> bool:
+        if command["device_id"] != device_id or execution["device_id"] != device_id:
+            return False
+        if command["zone_id"] != zone_id or execution["zone_id"] != zone_id:
+            return False
+        if execution_id and execution["execution_id"] != execution_id:
+            return False
+        if step and execution.get("active_step") and execution["active_step"] != step:
+            return False
+        return True
+
+    def _is_valid_transition(self, current_lifecycle: str, next_lifecycle: CommandLifecycle, message_kind: str) -> bool:
+        allowed: dict[str, set[str]] = {
+            CommandLifecycle.PLANNED.value: {CommandLifecycle.DISPATCHED.value, CommandLifecycle.ACKED.value, CommandLifecycle.ABORTED.value, CommandLifecycle.EXPIRED.value},
+            CommandLifecycle.DISPATCHED.value: {CommandLifecycle.ACKED.value, CommandLifecycle.EXECUTING.value, CommandLifecycle.FAILED.value, CommandLifecycle.EXPIRED.value, CommandLifecycle.ABORTED.value, CommandLifecycle.COMPLETED.value},
+            CommandLifecycle.ACKED.value: {CommandLifecycle.EXECUTING.value, CommandLifecycle.FAILED.value, CommandLifecycle.EXPIRED.value, CommandLifecycle.ABORTED.value, CommandLifecycle.COMPLETED.value},
+            CommandLifecycle.EXECUTING.value: {CommandLifecycle.COMPLETED.value, CommandLifecycle.FAILED.value, CommandLifecycle.EXPIRED.value, CommandLifecycle.ABORTED.value},
+            CommandLifecycle.COMPLETED.value: set(),
+            CommandLifecycle.FAILED.value: set(),
+            CommandLifecycle.EXPIRED.value: set(),
+            CommandLifecycle.ABORTED.value: set(),
+        }
+        if message_kind == "ACK" and next_lifecycle == CommandLifecycle.COMPLETED:
+            return False
+        return next_lifecycle.value in allowed.get(current_lifecycle, set())
+
+    def _has_fail_safe_lock(self, device_id: str, zone_id: str) -> bool:
+        critical_kinds = {
+            "stale_heartbeat",
+            "mqtt_disconnected",
+            "mqtt_auth_failure",
+            "empty_tank",
+            "leak_suspicion",
+            "flow_anomaly",
+            "pressure_anomaly",
+            "tank_depletion_trend",
+        }
+        for lock in self._store.get_active_safety_locks("global"):
+            if lock["kind"] in critical_kinds:
+                return True
+        for lock in self._store.get_active_safety_locks("device", device_id):
+            if lock["kind"] in critical_kinds or lock["kind"].startswith("sensor_"):
+                return True
+        for lock in self._store.get_active_safety_locks("zone", zone_id):
+            if lock["kind"] in critical_kinds:
+                return True
+        return False
+
+    def _reject_protocol_message(self, kind: str, trace_id: str, command_id: str, device_id: str, zone_id: str, reason: str) -> None:
+        self._store.note_incident(
+            "protocol_reject",
+            {
+                "trace_id": trace_id,
+                "command_id": command_id,
+                "device_id": device_id,
+                "zone_id": zone_id,
+                "kind": kind,
+                "reason": reason,
+            },
+        )
+        self._audit(trace_id, f"{kind}_REJECTED", f"{kind} rejected: {reason}", command_id=command_id, device_id=device_id, zone_id=zone_id, payload={"reason": reason})
 
     def _audit(self, trace_id: str, action_type: str, message: str, command_id: str | None = None, execution_id: str | None = None, device_id: str | None = None, zone_id: str | None = None, payload: dict[str, Any] | None = None) -> None:
         self._store.append_audit_log(

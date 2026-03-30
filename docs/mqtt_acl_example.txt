@@ -1,0 +1,28 @@
+# Mosquitto ACL example
+
+# Backend identity
+user greenhouse-backend
+topic read greenhouse/device/+/telemetry/raw
+topic read greenhouse/device/+/state
+topic read greenhouse/device/+/cmd/ack
+topic read greenhouse/device/+/cmd/result
+topic read greenhouse/device/+/event/error
+topic write greenhouse/device/+/cmd/execute
+
+# Device esp32-1
+user esp32-1
+topic write greenhouse/device/esp32-1/telemetry/raw
+topic write greenhouse/device/esp32-1/state
+topic write greenhouse/device/esp32-1/cmd/ack
+topic write greenhouse/device/esp32-1/cmd/result
+topic write greenhouse/device/esp32-1/event/error
+topic read greenhouse/device/esp32-1/cmd/execute
+
+# Device esp32-2
+user esp32-2
+topic write greenhouse/device/esp32-2/telemetry/raw
+topic write greenhouse/device/esp32-2/state
+topic write greenhouse/device/esp32-2/cmd/ack
+topic write greenhouse/device/esp32-2/cmd/result
+topic write greenhouse/device/esp32-2/event/error
+topic read greenhouse/device/esp32-2/cmd/execute

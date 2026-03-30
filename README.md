@@ -24,6 +24,8 @@ This repository now targets a backend-centric greenhouse runtime with a strict e
   - SQLite operational store and memory test store
 - `backend/state/influx.py`
   - Influx telemetry writer/query boundary
+- `backend/security/monitor.py`
+  - heartbeat, broker, replay, and anomaly-driven lock/alarm monitoring
 - `backend/decision_engine/engine.py`
   - deterministic rules first, Llama fallback second
 - `backend/safety/validator.py`
@@ -89,7 +91,8 @@ Command lifecycle:
    - verify safe stop
    - persist final result
 7. ACK/RESULT messages update execution state in SQLite.
-8. On backend restart, active executions are restored from SQLite and reconciled before continuing or safely aborting.
+8. `SecurityMonitor` applies replay detection, broker fail-safe locks, heartbeat staleness checks, and Influx-driven anomaly locks/alarms.
+9. On backend restart, active executions are restored from SQLite and reconciled before continuing or safely aborting.
 
 ## SQLite control boundary
 
@@ -122,7 +125,15 @@ It is not used for command state, safety locks, leases, alarms, or execution rec
 - All manual actions go through backend validation and orchestration.
 - Command idempotency is keyed by `command_id`.
 - Commands support `expires_at_ms`.
+- Commands include a per-command `nonce` and explicit `safety_constraints`.
+- Backend rejects unknown, mismatched, replay-suspected, and malformed ACK/RESULT messages.
+- Broker disconnects, auth failures, stale heartbeats, empty tank, leak suspicion, and critical anomalies create persistent SQLite locks/alarms.
 - Dangerous actions are audit logged.
+
+## Security model
+
+- Strict safe command channel and device/backend contract: [security_model.md](/V:/work/DIPLOM/testMoskitto/docs/security_model.md)
+- Mosquitto ACL example: [mqtt_acl_example.txt](/V:/work/DIPLOM/testMoskitto/docs/mqtt_acl_example.txt)
 
 ## Environment
 
@@ -138,6 +149,12 @@ Key variables:
 - `ZONE_IDS`
 - `LLAMA_API_URL`, `LLAMA_MODEL`
 - `OPENCLAW_OPERATOR_ENABLED`, `OPENCLAW_OPERATOR_URL`
+- `BROKER_RECONNECT_LOCK_SEC`
+- `ANOMALY_LOOKBACK_SEC`
+- `MIN_PRESSURE_KPA`, `MAX_PRESSURE_KPA`
+- `TANK_DEPLETION_DROP_THRESHOLD`
+- `STALE_SENSOR_WINDOW_SEC`
+- `NOISY_SENSOR_DELTA_THRESHOLD`
 
 ## Local run
 

@@ -73,6 +73,13 @@ class GlobalSafetyConfig:
     leak_shutdown_enabled: bool = True
     command_ttl_sec: int = 20
     device_heartbeat_timeout_sec: int = 90
+    broker_reconnect_lock_sec: int = 30
+    anomaly_lookback_sec: int = 900
+    min_pressure_kpa: float = 80.0
+    max_pressure_kpa: float = 400.0
+    tank_depletion_drop_threshold: float = 15.0
+    stale_sensor_window_sec: int = 300
+    noisy_sensor_delta_threshold: float = 35.0
 
 
 @dataclass(frozen=True)
@@ -148,6 +155,13 @@ def load_backend_config() -> BackendConfig:
             leak_shutdown_enabled=os.getenv("LEAK_SHUTDOWN_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"},
             command_ttl_sec=int(os.getenv("COMMAND_TTL_SEC", "20")),
             device_heartbeat_timeout_sec=int(os.getenv("DEVICE_HEARTBEAT_TIMEOUT_SEC", "90")),
+            broker_reconnect_lock_sec=int(os.getenv("BROKER_RECONNECT_LOCK_SEC", "30")),
+            anomaly_lookback_sec=int(os.getenv("ANOMALY_LOOKBACK_SEC", "900")),
+            min_pressure_kpa=float(os.getenv("MIN_PRESSURE_KPA", "80")),
+            max_pressure_kpa=float(os.getenv("MAX_PRESSURE_KPA", "400")),
+            tank_depletion_drop_threshold=float(os.getenv("TANK_DEPLETION_DROP_THRESHOLD", "15")),
+            stale_sensor_window_sec=int(os.getenv("STALE_SENSOR_WINDOW_SEC", "300")),
+            noisy_sensor_delta_threshold=float(os.getenv("NOISY_SENSOR_DELTA_THRESHOLD", "35")),
         ),
         state_store_backend=os.getenv("STATE_STORE_BACKEND", "sqlite").strip().lower() or "sqlite",
         telemetry_history_backend=os.getenv("TELEMETRY_HISTORY_BACKEND", "influx").strip().lower() or "influx",
