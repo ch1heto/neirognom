@@ -18,6 +18,7 @@ from backend.domain.models import (
     CommandRecord,
     CommandType,
     DeviceRecord,
+    ExecutionPhase,
     ManualLeaseRecord,
     SafetyLockRecord,
     TrayZoneRecord,
@@ -253,10 +254,20 @@ class MemoryStateStore:
         return deepcopy(record) if record else None
 
     def list_active_executions(self) -> list[dict[str, Any]]:
-        return [deepcopy(record) for record in self._executions.values() if record.get("lifecycle") in ACTIVE_LIFECYCLES]
+        return [deepcopy(record) for record in self._executions.values() if self._execution_is_open(record)]
 
     def list_recoverable_executions(self) -> list[dict[str, Any]]:
         return self.list_active_executions()
+
+    def _execution_is_open(self, record: dict[str, Any]) -> bool:
+        if record.get("lifecycle") in ACTIVE_LIFECYCLES:
+            return True
+        if record.get("phase") == ExecutionPhase.FINISHED.value:
+            return False
+        metadata = record.get("metadata") or {}
+        if metadata.get("aborting"):
+            return True
+        return bool(record.get("reserved_lock_id"))
 
     def create_safety_lock(self, lock: SafetyLockRecord) -> dict[str, Any]:
         record = lock.model_dump()

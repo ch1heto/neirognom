@@ -8,7 +8,7 @@ import paho.mqtt.client as mqtt
 
 from backend.config import load_backend_config
 from backend.dispatcher.service import CommandDispatcher
-from backend.domain.models import ManualLeaseRecord
+from backend.domain.models import ExecutionState, ManualLeaseRecord
 from backend.security.monitor import SecurityMonitor
 from backend.safety.validator import ActionProposal, SafetyValidator
 from backend.state.influx import MemoryTelemetryHistoryStore
@@ -290,6 +290,114 @@ class BackendArchitectureTests(unittest.TestCase):
         status_after = store.get_command_status("cmd-badresult")
         self.assertIsNone(rejected)
         self.assertEqual(status_after["lifecycle"], CommandLifecycle.DISPATCHED.value)
+
+    def test_duplicate_ack_is_ignored_by_orchestrator(self) -> None:
+        _, store, _, _, dispatcher, _, _ = self._build_stack()
+        dispatcher.dispatch_proposal(
+            ActionProposal(
+                trace_id="trace-dup-ack",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                actuator="irrigation_sequence",
+                action="START",
+                duration_sec=5,
+                origin=DecisionOrigin.OPERATOR,
+                reason="manual watering",
+                requested_at_ms=100_000,
+                command_id="cmd-dup-ack",
+            )
+        )
+        status_before = store.get_command_status("cmd-dup-ack")
+        first = dispatcher.handle_ack(
+            CommandAck(
+                message_id="msg-ack-dup-1",
+                trace_id="trace-dup-ack",
+                command_id="cmd-dup-ack",
+                execution_id=status_before["execution"]["execution_id"],
+                step="open_valve",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                status="acked",
+                local_timestamp_ms=100_100,
+                observed_state={},
+            )
+        )
+        duplicate = dispatcher.handle_ack(
+            CommandAck(
+                message_id="msg-ack-dup-2",
+                trace_id="trace-dup-ack",
+                command_id="cmd-dup-ack",
+                execution_id=status_before["execution"]["execution_id"],
+                step="open_valve",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                status="acked",
+                local_timestamp_ms=100_101,
+                observed_state={},
+            )
+        )
+
+        status_after = store.get_command_status("cmd-dup-ack")
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(duplicate)
+        self.assertEqual(status_after["execution"]["execution_state"], ExecutionState.ACKED.value)
+        self.assertTrue(any(entry["action_type"] == "COMMAND_ACK_DUPLICATE" for entry in store._audit_logs))
+
+    def test_stale_result_is_rejected_after_step_advance(self) -> None:
+        _, store, _, _, dispatcher, _, _ = self._build_stack()
+        with mock.patch("backend.execution.orchestrator.time.time", return_value=100.0):
+            dispatcher.dispatch_proposal(
+                ActionProposal(
+                    trace_id="trace-stale-result",
+                    device_id="esp32-1",
+                    zone_id="tray_1",
+                    actuator="irrigation_sequence",
+                    action="START",
+                    duration_sec=5,
+                    origin=DecisionOrigin.OPERATOR,
+                    reason="manual watering",
+                    requested_at_ms=100_000,
+                    command_id="cmd-stale-result",
+                )
+            )
+        status_before = store.get_command_status("cmd-stale-result")
+        dispatcher.handle_result(
+            CommandResult(
+                message_id="msg-result-open-1",
+                trace_id="trace-stale-result",
+                command_id="cmd-stale-result",
+                execution_id=status_before["execution"]["execution_id"],
+                step="open_valve",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                status="completed",
+                local_timestamp_ms=100_100,
+                observed_state={},
+                metrics={},
+            )
+        )
+        with mock.patch("backend.execution.orchestrator.time.time", return_value=102.0):
+            dispatcher.sweep()
+
+        stale = dispatcher.handle_result(
+            CommandResult(
+                message_id="msg-result-open-stale",
+                trace_id="trace-stale-result",
+                command_id="cmd-stale-result",
+                execution_id=status_before["execution"]["execution_id"],
+                step="open_valve",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                status="completed",
+                local_timestamp_ms=102_100,
+                observed_state={},
+                metrics={},
+            )
+        )
+
+        status_after = store.get_command_status("cmd-stale-result")
+        self.assertIsNone(stale)
+        self.assertEqual(status_after["execution"]["active_step"], "start_pump")
 
     def test_security_monitor_sets_stale_heartbeat_lock(self) -> None:
         _, store, _, _, _, telemetry_history, security_monitor = self._build_stack()

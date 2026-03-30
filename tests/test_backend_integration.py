@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
+from backend.domain.models import ExecutionState
 from shared.contracts.messages import CommandLifecycle
 from tests.fixtures import ack_payload, device_state_payload, result_payload, telemetry_payload
 from tests.harness import BackendTestHarness
@@ -69,6 +70,38 @@ class BackendIntegrationTests(unittest.TestCase):
         self.assertEqual(status["execution"]["lifecycle"], CommandLifecycle.EXPIRED.value)
         self.assertEqual(harness.mqtt.published[-1]["payload"]["step"], "stop_pump")
 
+    def test_timeout_without_ack_marks_execution_timed_out_and_releases_zone(self) -> None:
+        harness = BackendTestHarness(command_ttl_sec=60)
+        harness.seed_device_state(device_state_payload())
+
+        with mock.patch("backend.execution.orchestrator.time.time", return_value=100.0):
+            response = harness.execute_manual_action(
+                {
+                    "trace_id": "trace-timeout-no-ack",
+                    "command_id": "cmd-timeout-no-ack-0001",
+                    "device_id": "esp32-1",
+                    "zone_id": "tray_1",
+                    "actuator": "irrigation_sequence",
+                    "action": "START",
+                    "duration_sec": 5,
+                    "requested_at_ms": 100_000,
+                }
+            )
+
+        self.assertEqual(response["status"], CommandLifecycle.DISPATCHED.value)
+        with mock.patch("backend.execution.orchestrator.time.time", return_value=106.0):
+            harness.dispatcher.sweep()
+        with mock.patch("backend.execution.orchestrator.time.time", return_value=112.0):
+            harness.dispatcher.sweep()
+
+        status = harness.command_status("cmd-timeout-no-ack-0001")
+        zone = harness.store.get_zone_state("tray_1")
+        assert status is not None
+        self.assertEqual(status["lifecycle"], CommandLifecycle.EXPIRED.value)
+        self.assertEqual(status["execution"]["execution_state"], ExecutionState.TIMED_OUT.value)
+        self.assertIsNone(zone["reserved_by_execution"])
+        self.assertTrue(any(lock["kind"] == "unsafe_execution_contour" for lock in harness.store.get_active_safety_locks("zone", "tray_1")))
+
     def test_max_duration_enforcement_stops_pump_after_monitor_window(self) -> None:
         harness = BackendTestHarness()
         harness.seed_device_state(device_state_payload())
@@ -86,10 +119,10 @@ class BackendIntegrationTests(unittest.TestCase):
         )
         execution_id = response["execution_id"]
 
-        harness.ingest_result(result_payload(command_id="cmd-max-duration-0001", execution_id=execution_id, step="open_valve", local_timestamp_ms=100_100))
+        harness.ingest_result(result_payload(command_id="cmd-max-duration-0001", execution_id=execution_id, step="open_valve", trace_id="trace-max-duration", local_timestamp_ms=100_100))
         with mock.patch("backend.execution.orchestrator.time.time", return_value=102.0):
             harness.dispatcher.sweep()
-        harness.ingest_result(result_payload(command_id="cmd-max-duration-0001", execution_id=execution_id, step="start_pump", message_id="msg-result-0002", local_timestamp_ms=102_100))
+        harness.ingest_result(result_payload(command_id="cmd-max-duration-0001", execution_id=execution_id, step="start_pump", trace_id="trace-max-duration", message_id="msg-result-0002", local_timestamp_ms=102_100))
         harness.ingest_telemetry(
             telemetry_payload(
                 message_id="msg-flow-confirm-0001",
@@ -126,10 +159,10 @@ class BackendIntegrationTests(unittest.TestCase):
         )
         execution_id = response["execution_id"]
 
-        harness.ingest_result(result_payload(command_id="cmd-dry-run-0001", execution_id=execution_id, step="open_valve", local_timestamp_ms=100_100))
+        harness.ingest_result(result_payload(command_id="cmd-dry-run-0001", execution_id=execution_id, step="open_valve", trace_id="trace-dry-run", local_timestamp_ms=100_100))
         with mock.patch("backend.execution.orchestrator.time.time", return_value=102.0):
             harness.dispatcher.sweep()
-        harness.ingest_result(result_payload(command_id="cmd-dry-run-0001", execution_id=execution_id, step="start_pump", message_id="msg-result-0003", local_timestamp_ms=102_100))
+        harness.ingest_result(result_payload(command_id="cmd-dry-run-0001", execution_id=execution_id, step="start_pump", trace_id="trace-dry-run", message_id="msg-result-0003", local_timestamp_ms=102_100))
 
         with mock.patch("backend.execution.orchestrator.time.time", return_value=108.0):
             harness.dispatcher.sweep()
@@ -161,6 +194,7 @@ class BackendIntegrationTests(unittest.TestCase):
                 command_id="cmd-ack-flow-0001",
                 execution_id=response["execution_id"],
                 step="open_valve",
+                trace_id="trace-ack-flow",
                 status="acked",
             )
         )
@@ -169,6 +203,82 @@ class BackendIntegrationTests(unittest.TestCase):
         assert status is not None
         self.assertEqual(status["lifecycle"], CommandLifecycle.ACKED.value)
         self.assertEqual(status["execution"]["lifecycle"], CommandLifecycle.ACKED.value)
+        self.assertEqual(status["execution"]["execution_state"], ExecutionState.ACKED.value)
+
+    def test_duplicate_ack_is_ignored_without_regressing_state(self) -> None:
+        harness = BackendTestHarness()
+        harness.seed_device_state(device_state_payload())
+        response = harness.execute_manual_action(
+            {
+                "trace_id": "trace-duplicate-ack",
+                "command_id": "cmd-duplicate-ack-0001",
+                "device_id": "esp32-1",
+                "zone_id": "tray_1",
+                "actuator": "irrigation_sequence",
+                "action": "START",
+                "duration_sec": 5,
+                "requested_at_ms": 100_000,
+            }
+        )
+
+        payload = ack_payload(
+            command_id="cmd-duplicate-ack-0001",
+            execution_id=response["execution_id"],
+            step="open_valve",
+            trace_id="trace-duplicate-ack",
+            status="acked",
+        )
+        harness.ingest_ack(payload)
+        duplicate = dict(payload)
+        duplicate["message_id"] = "msg-ack-duplicate-0002"
+        harness.ingest_ack(duplicate)
+
+        status = harness.command_status("cmd-duplicate-ack-0001")
+        assert status is not None
+        self.assertEqual(status["lifecycle"], CommandLifecycle.ACKED.value)
+        self.assertEqual(status["execution"]["execution_state"], ExecutionState.ACKED.value)
+        self.assertTrue(any(entry["action_type"] == "COMMAND_ACK_DUPLICATE" for entry in harness.store._audit_logs))
+
+    def test_timeout_after_ack_finalizes_fault_path_and_releases_zone(self) -> None:
+        harness = BackendTestHarness(command_ttl_sec=60)
+        harness.seed_device_state(device_state_payload())
+
+        with mock.patch("backend.execution.orchestrator.time.time", return_value=100.0):
+            response = harness.execute_manual_action(
+                {
+                    "trace_id": "trace-timeout-after-ack",
+                    "command_id": "cmd-timeout-after-ack-0001",
+                    "device_id": "esp32-1",
+                    "zone_id": "tray_1",
+                    "actuator": "irrigation_sequence",
+                    "action": "START",
+                    "duration_sec": 5,
+                    "requested_at_ms": 100_000,
+                }
+            )
+        harness.ingest_ack(
+            ack_payload(
+                command_id="cmd-timeout-after-ack-0001",
+                execution_id=response["execution_id"],
+                step="open_valve",
+                trace_id="trace-timeout-after-ack",
+                status="acked",
+                local_timestamp_ms=100_100,
+            )
+        )
+        with mock.patch("backend.execution.orchestrator.time.time", return_value=112.0):
+            harness.dispatcher.sweep()
+        with mock.patch("backend.execution.orchestrator.time.time", return_value=118.0):
+            harness.dispatcher.sweep()
+
+        status = harness.command_status("cmd-timeout-after-ack-0001")
+        zone = harness.store.get_zone_state("tray_1")
+        assert status is not None
+        self.assertEqual(status["lifecycle"], CommandLifecycle.EXPIRED.value)
+        self.assertEqual(status["execution"]["execution_state"], ExecutionState.TIMED_OUT.value)
+        self.assertIn(status["execution"]["last_error"], {"result_timeout_during_safe_stop", "ack_timeout_during_safe_stop"})
+        self.assertIsNone(zone["reserved_by_execution"])
+        self.assertEqual(harness.mqtt.published[-1]["payload"]["step"], "stop_pump")
 
 
 if __name__ == "__main__":

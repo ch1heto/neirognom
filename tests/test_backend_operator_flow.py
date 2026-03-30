@@ -29,10 +29,10 @@ class BackendOperatorFlowTests(unittest.TestCase):
         execution_id = response["execution_id"]
         self.assertEqual(response["status"], CommandLifecycle.DISPATCHED.value)
 
-        harness.ingest_result(result_payload(command_id="cmd-manual-flow-0001", execution_id=execution_id, step="open_valve", local_timestamp_ms=100_100))
+        harness.ingest_result(result_payload(command_id="cmd-manual-flow-0001", execution_id=execution_id, step="open_valve", trace_id="trace-manual-flow-0001", local_timestamp_ms=100_100))
         with mock.patch("backend.execution.orchestrator.time.time", return_value=102.0):
             harness.dispatcher.sweep()
-        harness.ingest_result(result_payload(command_id="cmd-manual-flow-0001", execution_id=execution_id, step="start_pump", message_id="msg-result-manual-0002", local_timestamp_ms=102_100))
+        harness.ingest_result(result_payload(command_id="cmd-manual-flow-0001", execution_id=execution_id, step="start_pump", trace_id="trace-manual-flow-0001", message_id="msg-result-manual-0002", local_timestamp_ms=102_100))
         harness.ingest_telemetry(
             telemetry_payload(
                 message_id="msg-manual-flow-0001",
@@ -43,8 +43,8 @@ class BackendOperatorFlowTests(unittest.TestCase):
         )
         with mock.patch("backend.execution.orchestrator.time.time", return_value=104.5):
             harness.dispatcher.sweep()
-        harness.ingest_result(result_payload(command_id="cmd-manual-flow-0001", execution_id=execution_id, step="stop_pump", message_id="msg-result-manual-0003", local_timestamp_ms=104_600))
-        harness.ingest_result(result_payload(command_id="cmd-manual-flow-0001", execution_id=execution_id, step="close_valve", message_id="msg-result-manual-0004", local_timestamp_ms=104_700))
+        harness.ingest_result(result_payload(command_id="cmd-manual-flow-0001", execution_id=execution_id, step="stop_pump", trace_id="trace-manual-flow-0001", message_id="msg-result-manual-0003", local_timestamp_ms=104_600))
+        harness.ingest_result(result_payload(command_id="cmd-manual-flow-0001", execution_id=execution_id, step="close_valve", trace_id="trace-manual-flow-0001", message_id="msg-result-manual-0004", local_timestamp_ms=104_700))
         harness.ingest_state(
             device_state_payload(
                 message_id="msg-state-manual-0002",

@@ -31,6 +31,18 @@ class ExecutionPhase(StrEnum):
     FINISHED = "FINISHED"
 
 
+class ExecutionState(StrEnum):
+    PENDING = "pending"
+    DISPATCHED = "dispatched"
+    ACKED = "acked"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    FAULTED = "faulted"
+    CANCELLED = "cancelled"
+
+
 class DeviceRecord(DomainModel):
     device_id: str = Field(min_length=1, max_length=64)
     zone_id: str | None = None
@@ -90,6 +102,7 @@ class CommandExecutionRecord(DomainModel):
     device_id: str = Field(min_length=1, max_length=64)
     zone_id: str = Field(min_length=1, max_length=64)
     lifecycle: CommandLifecycle = CommandLifecycle.PLANNED
+    execution_state: ExecutionState = ExecutionState.PENDING
     phase: ExecutionPhase = ExecutionPhase.VALIDATE_REQUEST
     step_index: int = Field(default=0, ge=0)
     active_step: str | None = None
