@@ -72,7 +72,7 @@ Example `tools/call` payload:
       "operator_name": "OpenClaw",
       "zone_id": "tray_1",
       "device_id": "esp32-1",
-      "ui_action": "test_watering",
+      "ui_action": "open_valve",
       "duration_sec": 8
     }
   }

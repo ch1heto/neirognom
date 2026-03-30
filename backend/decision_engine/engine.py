@@ -71,6 +71,10 @@ class DecisionEngine:
         return self._proposal_from_llm(message, response)
 
     def _proposal_from_llm(self, message: TelemetryMessage, response: LlmDecisionResponse) -> ActionProposal | None:
+        if response.zone_id != message.zone_id:
+            self._record_llama_zone_mismatch(message, response)
+            return None
+
         mapping = {
             "open_valve": ("irrigation_valve", "OPEN"),
             "close_valve": ("irrigation_valve", "CLOSE"),
@@ -81,12 +85,10 @@ class DecisionEngine:
             log.error("unsupported llama decision=%s zone_id=%s", response.decision, response.zone_id)
             return None
         actuator, action = actuator_action
-        response_zone = self._store.get_zone_state(response.zone_id)
-        target_device_id = str(response_zone.get("device_id") or message.device_id)
         return ActionProposal(
             trace_id=message.trace_id,
-            device_id=target_device_id,
-            zone_id=response.zone_id,
+            device_id=message.device_id,
+            zone_id=message.zone_id,
             actuator=actuator,
             action=action,
             duration_sec=int(response.requested_duration_sec or 0),
@@ -97,7 +99,35 @@ class DecisionEngine:
                 "confidence": response.confidence,
                 "decision": response.decision,
                 "dose_ml": int(response.dose_ml or 0),
+                "requested_duration_sec": int(response.requested_duration_sec or 0),
             },
+        )
+
+    def _record_llama_zone_mismatch(self, message: TelemetryMessage, response: LlmDecisionResponse) -> None:
+        log.warning(
+            "llama zone mismatch ignored source_zone_id=%s response_zone_id=%s device_id=%s trace_id=%s",
+            message.zone_id,
+            response.zone_id,
+            message.device_id,
+            message.trace_id,
+        )
+        self._store.append_audit_log(
+            AuditLogRecord(
+                audit_id=f"audit-{uuid.uuid4().hex[:12]}",
+                trace_id=message.trace_id,
+                action_type="LLAMA_ZONE_MISMATCH",
+                message="llama response targeted a different zone and was rejected",
+                created_at_ms=int(time.time() * 1000),
+                device_id=message.device_id,
+                zone_id=message.zone_id,
+                payload={
+                    "source_zone_id": message.zone_id,
+                    "response_zone_id": response.zone_id,
+                    "decision": response.decision,
+                    "confidence": response.confidence,
+                    "rationale": response.rationale,
+                },
+            )
         )
 
     def _record_llama_audit(self, message: TelemetryMessage, response: LlmDecisionResponse | None) -> None:

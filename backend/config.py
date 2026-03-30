@@ -1,8 +1,19 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
+
+
+log = logging.getLogger("backend.config")
+GROW_MAPS_DIR = Path(__file__).resolve().parents[1] / "knowledge_base" / "grow_maps"
+DEPRECATED_OPENCLAW_ENV_VARS = (
+    "OPENCLAW_OPERATOR_ENABLED",
+    "OPENCLAW_OPERATOR_URL",
+    "OPENCLAW_OPERATOR_KEY",
+)
 
 
 def _csv(value: str, fallback: list[str]) -> list[str]:
@@ -145,6 +156,11 @@ class BackendConfig:
             env_zone = zone_id.upper()
             default_device_id = _default_zone_device(zone_id)
             default_line_id = _default_zone_line(zone_id)
+            crop_id = os.getenv(f"ZONE_{env_zone}_CROP_ID", "").strip()
+            if not crop_id:
+                log.warning("zone %s has no crop_id configured; grow-map guidance will be unavailable", zone_id)
+            elif not (GROW_MAPS_DIR / f"{crop_id}.json").exists():
+                log.warning("zone %s references missing grow map crop_id=%s path=%s", zone_id, crop_id, GROW_MAPS_DIR / f"{crop_id}.json")
             zone_configs.append(
                 ZoneSafetyConfig(
                     zone_id=zone_id,
@@ -163,13 +179,16 @@ class BackendConfig:
                     min_flow_ml_per_min=float(os.getenv(f"ZONE_{env_zone}_MIN_FLOW_ML_PER_MIN", "50")),
                     blocked=os.getenv(f"ZONE_{env_zone}_BLOCKED", "0").strip().lower() in {"1", "true", "yes", "on"},
                     maintenance_mode=os.getenv(f"ZONE_{env_zone}_MAINTENANCE_MODE", "0").strip().lower() in {"1", "true", "yes", "on"},
-                    crop_id=os.getenv(f"ZONE_{env_zone}_CROP_ID", "").strip(),
+                    crop_id=crop_id,
                 )
             )
         return zone_configs
 
 
 def load_backend_config() -> BackendConfig:
+    deprecated_env = [name for name in DEPRECATED_OPENCLAW_ENV_VARS if os.getenv(name) is not None]
+    if deprecated_env:
+        log.warning("deprecated OpenClaw env vars detected and ignored: %s; use OPENCLAW_MCP_* instead", ", ".join(deprecated_env))
     zone_ids = _csv(os.getenv("ZONE_IDS", ""), ["tray_1", "tray_2", "tray_3", "tray_4"])
     return BackendConfig(
         mqtt=MqttConfig(

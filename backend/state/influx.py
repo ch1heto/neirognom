@@ -114,6 +114,13 @@ from(bucket: "{self._config.bucket}")
 
 
 def build_telemetry_history_store(config: InfluxConfig, backend: str = "influx") -> TelemetryHistoryStore:
-    if backend == "memory" or not config.enabled or not config.token:
+    if backend == "memory":
+        log.info("telemetry history backend=memory")
+        return MemoryTelemetryHistoryStore()
+    if not config.enabled:
+        log.info("telemetry history falling back to memory because INFLUX_ENABLED=0")
+        return MemoryTelemetryHistoryStore()
+    if not config.token:
+        log.warning("telemetry history falling back to memory because INFLUX_TOKEN is empty")
         return MemoryTelemetryHistoryStore()
     return InfluxTelemetryHistoryStore(config)

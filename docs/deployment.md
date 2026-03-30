@@ -1,12 +1,12 @@
-﻿# Deployment Guide
+# Deployment Guide
 
-This backend is designed to run the same control path in local simulation and on the real farm. The only intended switch is the `.env` file.
+This project is intended to run the same backend path in local simulation and on real hardware. The environment file is the main switch.
 
-## Local Run With `sim_esp32.py`
+## Local Windows Run
 
-Use local mode when you want to validate operator flows, manual mode, MQTT wiring, and backend safety decisions without touching hardware.
+Use local mode for single-PC testing with Mosquitto, the backend, and `sim_esp32.py` on the same machine.
 
-Recommended `.env` values:
+Recommended local settings:
 
 ```env
 STATE_STORE_BACKEND=memory
@@ -14,38 +14,42 @@ TELEMETRY_HISTORY_BACKEND=memory
 INFLUX_ENABLED=0
 MQTT_HOST=127.0.0.1
 MQTT_PORT=1883
-LLAMA_API_URL=http://127.0.0.1:11434/v1/chat/completions
-LLAMA_MODEL=llama3.1
-OPERATOR_UI_ENABLED=1
 OPENCLAW_MCP_ENABLED=0
+OPERATOR_UI_ENABLED=1
+ZONE_TRAY_1_CROP_ID=lettuce_nft
+ZONE_TRAY_2_CROP_ID=lettuce_nft
+ZONE_TRAY_3_CROP_ID=lettuce_nft
+ZONE_TRAY_4_CROP_ID=lettuce_nft
 ```
 
-Local startup sequence:
+Exact local PowerShell commands:
 
-1. Start Mosquitto on the local machine.
-2. Copy `.env.example` to `.env` and keep the local block enabled.
-3. Start the backend:
-   ```powershell
-   .\venv\Scripts\python.exe .\backend_server.py
-   ```
-4. Start the simulator in a second terminal:
-   ```powershell
-   .\venv\Scripts\python.exe .\sim_esp32.py
-   ```
-5. Open the operator UI at `http://127.0.0.1:8780`.
+```powershell
+& .\venv\Scripts\Activate.ps1; python .\backend_server.py
+```
 
-Local notes:
+```powershell
+& .\venv\Scripts\Activate.ps1; python .\sim_esp32.py
+```
 
-- `memory` store avoids touching production SQLite state.
-- `INFLUX_ENABLED=0` keeps local runs simple.
-- Manual mode in the UI still routes commands through `SafetyValidator` and MQTT.
-- The simulator should not be modified to switch environments.
+Dashboard URL:
 
-## Production Run On Ubuntu
+```text
+http://127.0.0.1:8780
+```
 
-Use production mode when the backend is connected to real ESP32 hardware, persistent SQLite state, InfluxDB history, and local Ollama.
+Notes:
 
-Recommended `.env` values:
+- The dashboard is hosted by the backend. There is no separate dashboard server.
+- `memory` state/history keeps local tests disposable.
+- If Ollama is unavailable, the backend still starts; LLM recommendations just fall back.
+- Deprecated `OPENCLAW_OPERATOR_*` variables are ignored.
+
+## Production Ubuntu Run
+
+Use production mode when the backend is connected to real ESP32 hardware and persistent services.
+
+Recommended production settings:
 
 ```env
 STATE_STORE_BACKEND=sqlite
@@ -57,42 +61,24 @@ MQTT_HOST=127.0.0.1
 MQTT_PORT=1883
 LLAMA_API_URL=http://127.0.0.1:11434/v1/chat/completions
 LLAMA_MODEL=llama3.1
-OPERATOR_UI_ENABLED=1
 OPENCLAW_MCP_ENABLED=1
+OPERATOR_UI_ENABLED=1
 ```
 
-Ubuntu preparation:
+Preparation checklist:
 
-1. Install and enable Mosquitto.
-2. Install SQLite tools and make sure the backend process can write to `SQLITE_PATH`.
-3. Install and configure InfluxDB for telemetry history.
-4. Install Ollama locally and pull the selected Llama model.
-5. Create the `.env` file from `.env.example` and switch to the production block.
-6. Confirm each tray uses the correct `ZONE_TRAY_*_DEVICE_ID` binding before connecting hardware.
+1. Install and configure Mosquitto.
+2. Install and configure SQLite storage permissions.
+3. Install and configure InfluxDB if telemetry history is required.
+4. Install Ollama locally if LLM recommendations are desired.
+5. Populate `ZONE_TRAY_*_DEVICE_ID` and `ZONE_TRAY_*_CROP_ID` correctly before connecting hardware.
+6. Confirm the operator UI opens and every tray maps to the intended device.
 
-Production startup:
+## Knowledge-Base Expectations
 
-1. Start Mosquitto.
-2. Start InfluxDB.
-3. Start Ollama.
-4. Start the backend service.
-5. Power on ESP32 controllers and confirm they publish presence, state, and telemetry.
-6. Open the operator UI and verify every tray is mapped to the expected device id.
+The live runtime currently loads:
 
-Production notes:
+- `knowledge_base/grow_maps/*.json`
+- `knowledge_base/alerts/critical_thresholds.json`
 
-- Keep `STATE_STORE_BACKEND=sqlite` so commands, alarms, and audit entries survive restart.
-- Keep `TELEMETRY_HISTORY_BACKEND=influx` and `INFLUX_ENABLED=1` for anomaly checks and Llama context windows.
-- Llama recommendations never actuate hardware directly. All commands still pass through `SafetyValidator`.
-- Manual mode pauses automated telemetry-driven decisions, but manual actuator tests still go through the same safety gate.
-
-## Environment Separation Checklist
-
-Before switching between local and production, confirm:
-
-- `.env` points to the correct MQTT broker.
-- `.env` points to the correct SQLite path or memory backend.
-- `INFLUX_ENABLED` matches the chosen telemetry history backend.
-- `ZONE_IDS` and every `ZONE_TRAY_*_DEVICE_ID` match the intended tray-to-device mapping.
-- Operator UI opens and shows the correct system mode.
-- MQTT topics stay unchanged between environments.
+Other JSON files under `knowledge_base/` are currently reference material only.

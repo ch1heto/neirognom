@@ -37,6 +37,7 @@ class TraySimState:
     water_level: float
     valve_open: bool = False
     doser_active: bool = False
+    pump_on: bool = False
     connectivity: DeviceConnectivity = DeviceConnectivity.ONLINE
     last_command_ids: deque[str] = field(default_factory=lambda: deque(maxlen=128))
     last_nonces: deque[str] = field(default_factory=lambda: deque(maxlen=128))
@@ -78,6 +79,7 @@ class FakeEsp32Simulator:
     ) -> None:
         self.publish_interval_sec = publish_interval_sec
         self.mode_name = mode
+        self._rng = random.Random(42)
         self.mode = MODES[mode]
         self.max_valve_open_sec = max(1, valve_limit_sec)
         self.max_dose_duration_sec = max(1, dose_limit_sec)
@@ -134,9 +136,9 @@ class FakeEsp32Simulator:
             tray_states[zone_id] = TraySimState(
                 device_id=device_id,
                 zone_id=zone_id,
-                ph=self.mode.ph + random.uniform(-0.05, 0.05),
-                ec=self.mode.ec + random.uniform(-0.03, 0.03),
-                water_level=self.mode.water_level + random.uniform(-1.0, 1.0),
+                ph=self.mode.ph + self._rng.uniform(-0.05, 0.05),
+                ec=self.mode.ec + self._rng.uniform(-0.03, 0.03),
+                water_level=self.mode.water_level + self._rng.uniform(-1.0, 1.0),
             )
         if not tray_states:
             raise ValueError(f"unknown_tray_id:{tray_id}")
@@ -159,6 +161,7 @@ class FakeEsp32Simulator:
                 tray.connectivity = DeviceConnectivity.SAFE_MODE
                 tray.valve_open = False
                 tray.doser_active = False
+                tray.pump_on = False
 
     def _on_message(self, client, userdata, msg: mqtt.MQTTMessage) -> None:
         raw = msg.payload.decode("utf-8", errors="replace")
@@ -270,11 +273,14 @@ class FakeEsp32Simulator:
                 "ph": round(tray.ph, 2),
                 "ec": round(tray.ec, 2),
                 "water_level": round(tray.water_level, 2),
+                "flow_rate_ml_per_min": round(self._current_flow_rate_ml_per_min(tray), 2),
+                "pressure_kpa": round(self._current_pressure_kpa(tray), 2),
             },
             status={
                 "mode": self.mode_name,
                 "valve_open": tray.valve_open,
                 "doser_active": tray.doser_active,
+                "pump_on": tray.pump_on,
             },
             meta={"simulator": True},
             local_timestamp=self._now_ms(),
@@ -354,6 +360,11 @@ class FakeEsp32Simulator:
                 tray.valve_open = True
             elif action == "CLOSE":
                 tray.valve_open = False
+        elif actuator == "master_pump":
+            if action == "ON":
+                tray.pump_on = True
+            elif action == "OFF":
+                tray.pump_on = False
         elif actuator == "nutrient_doser":
             if action == "START":
                 self._apply_nutrient_dose(tray, command)
@@ -369,16 +380,32 @@ class FakeEsp32Simulator:
         tray.water_level = max(0.0, min(100.0, tray.water_level - 0.4 * dose_factor))
 
     def _advance_environment(self, tray: TraySimState) -> None:
-        if tray.valve_open:
-            tray.water_level = min(100.0, tray.water_level + random.uniform(0.6, 1.4))
+        if tray.valve_open and tray.pump_on:
+            tray.water_level = min(100.0, tray.water_level + self._rng.uniform(0.8, 1.6))
             tray.ec += (self.mode.ec - tray.ec) * 0.08
             tray.ph += (self.mode.ph - tray.ph) * 0.06
+        elif tray.valve_open:
+            tray.water_level = max(0.0, tray.water_level - self._rng.uniform(0.15, 0.35))
+            tray.ec += (self.mode.ec - tray.ec) * 0.03 + self._rng.uniform(-0.01, 0.01)
+            tray.ph += (self.mode.ph - tray.ph) * 0.03 + self._rng.uniform(-0.02, 0.02)
         else:
-            tray.water_level = max(0.0, tray.water_level - random.uniform(0.25, 0.6))
-            tray.ec += (self.mode.ec - tray.ec) * 0.03 + random.uniform(-0.02, 0.02)
-            tray.ph += (self.mode.ph - tray.ph) * 0.03 + random.uniform(-0.03, 0.03)
+            tray.water_level = max(0.0, tray.water_level - self._rng.uniform(0.25, 0.6))
+            tray.ec += (self.mode.ec - tray.ec) * 0.03 + self._rng.uniform(-0.02, 0.02)
+            tray.ph += (self.mode.ph - tray.ph) * 0.03 + self._rng.uniform(-0.03, 0.03)
         tray.ph = max(4.5, min(8.0, tray.ph))
         tray.ec = max(0.4, min(3.6, tray.ec))
+
+    def _current_flow_rate_ml_per_min(self, tray: TraySimState) -> float:
+        if tray.valve_open and tray.pump_on:
+            return 140.0 + self._rng.uniform(-8.0, 8.0)
+        return 0.0
+
+    def _current_pressure_kpa(self, tray: TraySimState) -> float:
+        if tray.pump_on and tray.valve_open:
+            return 160.0 + self._rng.uniform(-10.0, 10.0)
+        if tray.pump_on:
+            return 120.0 + self._rng.uniform(-8.0, 8.0)
+        return 95.0 + self._rng.uniform(-5.0, 5.0)
 
     def _presence_payload(self, tray: TraySimState, connectivity: DeviceConnectivity, *, reason: str) -> dict[str, Any]:
         message = PresenceMessage(
@@ -398,6 +425,7 @@ class FakeEsp32Simulator:
         return {
             "valve_open": tray.valve_open,
             "doser_active": tray.doser_active,
+            "pump_on": tray.pump_on,
             "connectivity": tray.connectivity.value,
         }
 
@@ -424,7 +452,8 @@ class FakeEsp32Simulator:
     def _log_state(self, tray: TraySimState, label: str) -> None:
         print(
             f"[STATE:{label}] {tray.zone_id} connectivity={tray.connectivity.value} "
-            f"valve_open={tray.valve_open} doser_active={tray.doser_active} "
+            f"valve_open={tray.valve_open} pump_on={tray.pump_on} doser_active={tray.doser_active} "
+            f"flow_rate={self._current_flow_rate_ml_per_min(tray):.2f} pressure={self._current_pressure_kpa(tray):.2f} "
             f"ph={tray.ph:.2f} ec={tray.ec:.2f} water_level={tray.water_level:.2f}"
         )
 

@@ -1,196 +1,92 @@
-﻿# Greenhouse Backend Execution Architecture
+# Greenhouse Backend
 
-This repository now targets a backend-centric greenhouse runtime with a strict execution safety boundary.
+Backend-centric greenhouse control runtime for local simulator testing and real ESP32 deployments.
 
-Architecture notes:
+## Runtime Summary
 
-- Runtime layers: [architecture_layers.md](/V:/work/DIPLOM/testMoskitto/docs/architecture_layers.md)
+- ESP32 devices publish telemetry, state, presence, ACK, and RESULT over MQTT.
+- The backend owns state, deterministic rules, LLM recommendations, safety validation, orchestration, audit logging, and the operator UI.
+- Llama provides recommendations only. It never sends hardware commands directly.
+- The operator dashboard is served by the backend itself. There is no separate dashboard server.
 
-## Runtime path
+## Local Windows Quick Start
 
-- `ESP32` stays edge-only: sensors, actuators, watchdogs, safe mode.
-- `MQTT` is transport only.
-- `SQLite` is the operational/control database and single source of truth.
-- `InfluxDB` stores telemetry history and trend queries only.
-- `Backend` owns state, decisions, safety validation, orchestration, dispatch, recovery.
-- `Llama 3.1` provides recommendations only.
-- `OpenClaw` is an operator/MCP client to backend tools and never publishes hardware commands directly.
+Use the local simulator profile from `.env` / `.env.example`.
 
-## Package map
-
-- `shared/contracts/messages.py`
-  - strict MQTT/API DTOs
-- `backend/domain/models.py`
-  - `Device`, `TrayZone`, `Command`, `CommandExecution`, `SafetyLock`, `ManualLease`, `Alarm`, `AuditLog`, `AutomationFlag`
-- `backend/config.py`
-  - MQTT, SQLite, InfluxDB, Llama, MCP/operator adapter, zone/global safety config
-- `backend/state/store.py`
-  - SQLite operational store and memory test store
-- `backend/state/influx.py`
-  - Influx telemetry writer/query boundary
-- `backend/security/monitor.py`
-  - heartbeat, broker, replay, and anomaly-driven lock/alarm monitoring
-- `backend/decision_engine/engine.py`
-  - deterministic rules first, Llama fallback second
-- `backend/safety/validator.py`
-  - final backend safety gate
-- `backend/execution/orchestrator.py`
-  - irrigation sequencing, safe stop, TTL, restart recovery
-- `backend/dispatcher/service.py`
-  - orchestration-facing dispatch facade
-- `backend/ingestion/service.py`
-  - MQTT ingestion, validation, dedup, normalization
-- `backend/api/tools.py`
-  - operator/OpenClaw tool layer
-- `backend/operator/service.py`
-  - operator-facing safe control service
-- `backend/operator/web.py`
-  - runtime-hosted HTTP server for the operator UI and event log API
-- `integrations/llama/client.py`
-  - local Llama API adapter
-- `integrations/openclaw_mcp/tools.py`
-  - OpenClaw MCP adapter
-- `integrations/openclaw_mcp/server.py`
-  - HTTP/JSON-RPC MCP-compatible tool server for OpenClaw
-- `backend/runtime.py`
-  - canonical runtime wiring
-- `backend_server.py`
-  - canonical entrypoint
-
-## Core entities
-
-- `Device`
-- `TrayZone`
-- `Command`
-- `CommandExecution`
-- `SafetyLock`
-- `ManualLease`
-- `Alarm`
-- `AuditLog`
-
-Command lifecycle:
-
-- `PLANNED`
-- `DISPATCHED`
-- `ACKED`
-- `EXECUTING`
-- `COMPLETED`
-- `FAILED`
-- `EXPIRED`
-- `ABORTED`
-
-## Data flow
-
-1. Edge publishes telemetry/state over MQTT.
-2. `IngestionService` validates JSON, deduplicates by `message_id`, updates SQLite current state, writes telemetry history to InfluxDB.
-3. `DecisionEngine` applies deterministic rules.
-4. If rules are insufficient, backend asks Llama for a JSON recommendation.
-5. `SafetyValidator` checks locks, leases, cooldowns, source availability, leaks, overflow, run quotas, global limits.
-6. `IrrigationOrchestrator` creates `Command` + `CommandExecution`, reserves the zone, and sequences:
-   - validate request
-   - reserve zone
-   - open valve
-   - wait settle delay
-   - start pump
-   - confirm flow
-   - monitor duration / volume / anomalies
-   - stop pump
-   - close valve
-   - verify safe stop
-   - persist final result
-7. ACK/RESULT messages update execution state in SQLite.
-8. `SecurityMonitor` applies replay detection, broker fail-safe locks, heartbeat staleness checks, and Influx-driven anomaly locks/alarms.
-9. On backend restart, active executions are restored from SQLite and reconciled before continuing or safely aborting.
-
-## SQLite control boundary
-
-SQLite stores:
-
-- current device/zone state
-- command records
-- command execution records
-- safety locks
-- manual leases
-- automation flags
-- active alarms
-- audit logs
-- processed message ids
-
-## InfluxDB boundary
-
-InfluxDB stores only:
-
-- sensor history
-- flow history
-- environmental trends
-- telemetry lookback queries for reasoning/analytics
-
-It is not used for command state, safety locks, leases, alarms, or execution recovery.
-
-## Safety guarantees
-
-- No LLM/OpenClaw/UI path sends actuator commands directly.
-- All manual actions go through backend validation and orchestration.
-- Command idempotency is keyed by `command_id`.
-- Commands support `ttl_sec` and carry `created_at` in the transport envelope.
-- Commands include a per-command `nonce` and explicit `safety_caps`.
-- Backend rejects unknown, mismatched, replay-suspected, and malformed ACK/RESULT messages.
-- Broker disconnects, auth failures, stale heartbeats, empty tank, leak suspicion, and critical anomalies create persistent SQLite locks/alarms.
-- Dangerous actions are audit logged.
-
-## Security model
-
-- Strict safe command channel and device/backend contract: [security_model.md](/V:/work/DIPLOM/testMoskitto/docs/security_model.md)
-- Mosquitto ACL example: [mqtt_acl_example.txt](/V:/work/DIPLOM/testMoskitto/docs/mqtt_acl_example.txt)
-
-## Environment
-
-See `.env.example`.
-
-Deployment split:
-
-- Local simulator + backend: [deployment.md](/V:/work/DIPLOM/testMoskitto/docs/deployment.md)
-- ESP32 firmware contract checklist: [esp32_firmware_checklist.md](/V:/work/DIPLOM/testMoskitto/docs/esp32_firmware_checklist.md)
-
-Key variables:
-
-- `STATE_STORE_BACKEND=sqlite|memory`
-- `SQLITE_PATH`
-- `TELEMETRY_HISTORY_BACKEND=influx|memory`
-- `INFLUX_URL`, `INFLUX_ORG`, `INFLUX_BUCKET`, `INFLUX_TOKEN`
-- `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`
-- `ZONE_IDS`
-- `LLAMA_API_URL`, `LLAMA_MODEL`
-- `OPENCLAW_MCP_ENABLED`, `OPENCLAW_MCP_HOST`, `OPENCLAW_MCP_PORT`
-- `OPENCLAW_MCP_ACTION_TOKEN`, `OPENCLAW_MCP_REQUIRE_ACTION_TOKEN`
-- `BROKER_RECONNECT_LOCK_SEC`
-- `ANOMALY_LOOKBACK_SEC`
-- `MIN_PRESSURE_KPA`, `MAX_PRESSURE_KPA`
-- `TANK_DEPLETION_DROP_THRESHOLD`
-- `STALE_SENSOR_WINDOW_SEC`
-- `NOISY_SENSOR_DELTA_THRESHOLD`
-
-## Local run
+Backend:
 
 ```powershell
-.\venv\Scripts\python.exe .\backend_server.py
+& .\venv\Scripts\Activate.ps1; python .\backend_server.py
 ```
 
-If `OPERATOR_UI_ENABLED=1`, the backend also hosts the operator UI at `http://127.0.0.1:8780` by default.
+Simulator:
 
-Operator UI notes: [operator_ui.md](/V:/work/DIPLOM/testMoskitto/docs/operator_ui.md)
+```powershell
+& .\venv\Scripts\Activate.ps1; python .\sim_esp32.py
+```
 
-If `OPENCLAW_MCP_ENABLED=1`, the backend also hosts the OpenClaw MCP adapter at `http://127.0.0.1:8790/mcp` by default.
+Dashboard URL:
 
-OpenClaw MCP notes: [openclaw_mcp.md](/V:/work/DIPLOM/testMoskitto/docs/openclaw_mcp.md)
+```text
+http://127.0.0.1:8780
+```
+
+## Local Defaults
+
+The local profile is intended for a single Windows machine with Mosquitto, the backend, and `sim_esp32.py` all running locally.
+
+- `MQTT_HOST=127.0.0.1`
+- `MQTT_PORT=1883`
+- `STATE_STORE_BACKEND=memory`
+- `TELEMETRY_HISTORY_BACKEND=memory`
+- `INFLUX_ENABLED=0`
+- `OPENCLAW_MCP_ENABLED=0`
+- `OPERATOR_UI_ENABLED=1`
+- `ZONE_TRAY_*_CROP_ID=lettuce_nft`
+
+Deprecated `OPENCLAW_OPERATOR_*` variables are ignored. Use `OPENCLAW_MCP_*` only.
+
+## Runtime Entry Points
+
+- `backend_server.py`: canonical backend entry point
+- `backend/runtime.py`: runtime wiring
+- `sim_esp32.py`: local ESP32 simulator
+- `operator_ui.html`: operator dashboard served by the backend HTTP server
+
+## Knowledge Base Status
+
+Runtime-active knowledge-base files:
+
+- `knowledge_base/grow_maps/lettuce_nft.json`
+- `knowledge_base/alerts/critical_thresholds.json`
+
+Reference-only files kept for future design work and documentation:
+
+- `knowledge_base/alerts/control_safety.json`
+- `knowledge_base/alerts/recovery_protocols.json`
+- `knowledge_base/equipment/actuator_registry.json`
+
+Those reference files are not loaded by the current runtime and should not be treated as the live command/topic contract.
+
+## Safety Notes
+
+- All actuator paths still pass through `SafetyValidator`.
+- Manual mode pauses automated telemetry-driven decisions but keeps manual actions safety-gated.
+- LLM responses are bound to the source telemetry zone. Cross-zone LLM actions are rejected and audit logged.
+- Missing crop IDs now generate warnings instead of silently disabling grow-map context.
+
+## Documentation
+
+- Architecture: [docs/architecture_layers.md](docs/architecture_layers.md)
+- Deployment: [docs/deployment.md](docs/deployment.md)
+- Operator UI: [docs/operator_ui.md](docs/operator_ui.md)
+- OpenClaw MCP: [docs/openclaw_mcp.md](docs/openclaw_mcp.md)
+- ESP32 firmware checklist: [docs/esp32_firmware_checklist.md](docs/esp32_firmware_checklist.md)
+- ESP32/backend protocol: [docs/esp32_backend_protocol.md](docs/esp32_backend_protocol.md)
+- Security model: [docs/security_model.md](docs/security_model.md)
+- Knowledge-base usage: [docs/knowledge_base.md](docs/knowledge_base.md)
 
 ## Testing
 
-Tests removed. Use `sim_esp32.py` for local testing.
-
-## Migration notes
-
-- Old `PostgreSQL`/`sqlite_compat` assumptions are removed from the runtime path.
-- Old bridge-era runtime modules and prompts have been removed.
-- If older tooling still expects direct actuator dispatch, route it through `BackendToolService.execute_manual_action()` or the dispatcher facade instead.
-
+Automated tests were removed from this repository.
+Use `sim_esp32.py` for local end-to-end verification.

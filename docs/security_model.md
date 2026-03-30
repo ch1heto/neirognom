@@ -139,11 +139,11 @@ When detected, backend persists:
 
 ## MQTT ACL example
 
-See [mqtt_acl_example.txt](/V:/work/DIPLOM/testMoskitto/docs/mqtt_acl_example.txt).
+See [mqtt_acl_example.txt](mqtt_acl_example.txt).
 
 For the full backend-to-ESP32 practical protocol, including telemetry,
 presence, duplicate handling, safe-mode behavior, and expected device error
-codes, see [esp32_backend_protocol.md](/V:/work/DIPLOM/testMoskitto/docs/esp32_backend_protocol.md).
+codes, see [esp32_backend_protocol.md](esp32_backend_protocol.md).
 
 ## Assumptions and limitations
 

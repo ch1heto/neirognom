@@ -2,7 +2,7 @@
 
 This document is the practical firmware-facing contract for the current
 backend-centric architecture. It complements, and does not replace,
-[security_model.md](/V:/work/DIPLOM/testMoskitto/docs/security_model.md).
+[security_model.md](security_model.md).
 
 ## Canonical MQTT topics
 

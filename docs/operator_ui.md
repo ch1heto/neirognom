@@ -1,6 +1,6 @@
-﻿# Operator UI
+# Operator UI
 
-The operator web UI is a thin HTTP layer hosted inside the backend runtime. It never publishes MQTT directly.
+The operator web UI is hosted inside the backend runtime. It never publishes MQTT directly.
 
 Runtime path:
 
@@ -8,38 +8,24 @@ Runtime path:
 - backend operator service -> `BackendToolService.execute_manual_action()`
 - backend safety validator -> dispatcher -> MQTT
 
-## Available actions
+## Available Actions
 
 - view device and zone status
-- switch the backend between auto and manual mode
+- switch between auto and manual system mode
 - open / close valve
 - start / stop pump
 - start / stop nutrient dosing
 - review the live event log and export visible events to CSV
 - emergency stop
 
-All manual actions:
+All manual actions still pass through the backend safety path.
 
-- create command journal entries in SQLite
-- include operator metadata
-- use the same safety checks as automated actions
-- inherit command TTL from backend config
-- cap durations to zone or pump safety limits
+## Run Locally
 
-## Run
-
-Set in `.env` if needed:
-
-```env
-OPERATOR_UI_ENABLED=1
-OPERATOR_UI_HOST=127.0.0.1
-OPERATOR_UI_PORT=8780
-```
-
-Start the backend:
+Backend:
 
 ```powershell
-.\venv\Scripts\python.exe .\backend_server.py
+& .\venv\Scripts\Activate.ps1; python .\backend_server.py
 ```
 
 Open:
@@ -47,6 +33,8 @@ Open:
 ```text
 http://127.0.0.1:8780
 ```
+
+There is no standalone dashboard server. The backend serves `operator_ui.html` itself.
 
 ## API
 
@@ -60,4 +48,3 @@ http://127.0.0.1:8780
 - `POST /api/operator/manual-command`
 - `POST /api/operator/command`
 - `POST /api/operator/emergency-stop`
-
