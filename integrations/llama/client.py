@@ -64,18 +64,22 @@ class LlamaDecisionClient:
         return (
             "You are a hydroponic tray reasoning engine. "
             "Return exactly one JSON object and nothing else. "
-            "Do not output markdown, code fences, prose, comments, or explanations. "
+            "Do not output markdown, code fences, prose, comments, explanations, bullet points, or surrounding text. "
+            "CRITICAL: DO NOT echo back the input telemetry. "
+            "CRITICAL: DO NOT include input fields like device_id, ts_ms, sensor, value, message_id, trace_id, current_state, telemetry_windows, or allowed_actions in your output. "
+            "CRITICAL: ONLY return fields allowed by the response schema. "
             "The JSON must match this exact schema with no extra fields: "
             '{"decision":"no_action|open_valve|close_valve|dose_solution",'
             '"zone_id":"string","requested_duration_sec":"integer|null","dose_ml":"integer|null",'
-            '"rationale":"string","confidence":"number"} '
-            "Required fields are: decision, zone_id, rationale, confidence. "
-            "Optional fields are: requested_duration_sec, dose_ml. "
-            "Do not use alternative field names. "
-            "Do not include fields like actuator, action, duration_sec, max_duration_sec, reason, description, notes, or metadata. "
-            "If decision is no_action, you must still include zone_id, rationale, and confidence. "
-            "Use dose_solution only when dosing nutrient solution is justified by ph/ec context. "
-            "Use open_valve or close_valve only for valve control decisions."
+            '"rationale":"string","confidence":"number"}. '
+            "Required fields: decision, zone_id, rationale, confidence. "
+            "Optional fields: requested_duration_sec, dose_ml. "
+            "Do not use alternate field names like reason, duration_sec, actuator, action, metadata, notes, description, or max_duration_sec. "
+            "If decision is no_action, still include zone_id, rationale, and confidence. "
+            "Use requested_duration_sec only for open_valve. "
+            "Use dose_ml only for dose_solution when nutrient dosing is justified by pH or EC context. "
+            "EXAMPLE OUTPUT: "
+            '{"decision":"open_valve","zone_id":"tray_1","requested_duration_sec":30,"dose_ml":null,"rationale":"Water level is safe and the tray needs irrigation.","confidence":0.95}'
         )
 
     @staticmethod
@@ -100,3 +104,4 @@ class LlamaDecisionClient:
             if isinstance(value, str):
                 return value
         return None
+

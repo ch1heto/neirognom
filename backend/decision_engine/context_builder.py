@@ -47,7 +47,7 @@ class DecisionContextBuilder:
         end_ms = message.ts_ms
         sensors = ("ph", "ec", "water_level")
         return {
-            sensor: self._telemetry_history.get_sensor_history(message.device_id, sensor, start_ms, end_ms, limit=50)
+            sensor: self._telemetry_history.get_sensor_history(message.device_id, sensor, start_ms, end_ms, limit=3)
             for sensor in sensors
         }
 
@@ -106,8 +106,9 @@ class DecisionContextBuilder:
                     decision="dose_solution",
                     actuator="nutrient_doser",
                     action="START",
-                    max_duration_sec=max(0, int(self._config.global_safety.max_manual_duration_sec)),
-                    description="Dose nutrient solution for a short bounded interval.",
+                    max_duration_sec=5,
+                    description="Dose nutrient solution into the active tray.",
                 )
             )
         return actions
+
