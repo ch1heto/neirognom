@@ -98,6 +98,7 @@ class ZoneSafetyConfig:
     min_flow_ml_per_min: float = 50.0
     blocked: bool = False
     maintenance_mode: bool = False
+    crop_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,7 @@ class BackendConfig:
                     min_flow_ml_per_min=float(os.getenv(f"ZONE_{env_zone}_MIN_FLOW_ML_PER_MIN", "50")),
                     blocked=os.getenv(f"ZONE_{env_zone}_BLOCKED", "0").strip().lower() in {"1", "true", "yes", "on"},
                     maintenance_mode=os.getenv(f"ZONE_{env_zone}_MAINTENANCE_MODE", "0").strip().lower() in {"1", "true", "yes", "on"},
+                    crop_id=os.getenv(f"ZONE_{env_zone}_CROP_ID", "").strip(),
                 )
             )
         return zone_configs

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
@@ -95,7 +95,34 @@ class MemoryStateStore:
         self._audit_logs: list[dict[str, Any]] = []
         self._automation_flags: dict[str, dict[str, Any]] = {}
         self._global_state: dict[str, Any] = {}
-
+        self._grow_maps_dir = Path(__file__).resolve().parents[2] / "knowledge_base" / "grow_maps"
+        self._grow_maps: dict[str, dict[str, Any]] = {}
+    def _load_grow_map(self, crop_id: str) -> dict[str, Any]:
+        crop_key = str(crop_id or "").strip()
+        if not crop_key:
+            return {}
+        cached = self._grow_maps.get(crop_key)
+        if cached is not None:
+            return deepcopy(cached)
+        path = self._grow_maps_dir / f"{crop_key}.json"
+        if not path.exists():
+            self._grow_maps[crop_key] = {}
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("grow map load failed crop_id=%s error=%s", crop_key, exc)
+            self._grow_maps[crop_key] = {}
+            return {}
+        if not isinstance(payload, dict):
+            self._grow_maps[crop_key] = {}
+            return {}
+        self._grow_maps[crop_key] = payload
+        return deepcopy(payload)
+    def _attach_grow_map(self, zone: dict[str, Any]) -> dict[str, Any]:
+        crop_id = str(zone.get("crop_id") or "").strip()
+        zone["grow_map"] = self._load_grow_map(crop_id)
+        return zone
     def initialize(self, zones: list[ZoneSafetyConfig], global_safety: GlobalSafetyConfig) -> None:
         self._global_state = {
             "emergency_stop": global_safety.emergency_stop,
@@ -122,6 +149,7 @@ class MemoryStateStore:
         )
         for zone in zones:
             existing = self._zones.get(zone.zone_id) or {}
+            crop_id = str(existing.get("crop_id") or zone.crop_id or "")
             zone_record = TrayZoneRecord(
                 zone_id=zone.zone_id,
                 device_id=existing.get("device_id") or zone.device_id,
@@ -131,6 +159,7 @@ class MemoryStateStore:
                 shared_line_restricted=bool(existing.get("shared_line_restricted", zone.shared_line_restricted)),
                 blocked=zone.blocked,
                 maintenance_mode=bool(existing.get("maintenance_mode", zone.maintenance_mode)),
+                crop_id=crop_id,
                 cooldown_sec=zone.cooldown_sec,
                 max_duration_per_run_sec=zone.max_duration_per_run_sec,
                 max_open_duration_sec=zone.max_open_duration_sec,
@@ -145,8 +174,9 @@ class MemoryStateStore:
                 device_state=existing.get("device_state", {}),
                 reserved_by_execution=existing.get("reserved_by_execution"),
             )
-            self._zones[zone.zone_id] = zone_record.model_dump()
-
+            zone_payload = zone_record.model_dump()
+            zone_payload["grow_map"] = self._load_grow_map(crop_id)
+            self._zones[zone.zone_id] = zone_payload
     def seen_message(self, message_id: str) -> bool:
         if message_id in self._seen_messages:
             return True
@@ -201,15 +231,17 @@ class MemoryStateStore:
         return deepcopy(device)
 
     def get_zone_state(self, zone_id: str) -> dict[str, Any]:
-        return deepcopy(self._zones.get(zone_id, TrayZoneRecord(zone_id=zone_id).model_dump()))
+        zone = deepcopy(self._zones.get(zone_id, TrayZoneRecord(zone_id=zone_id).model_dump()))
+        return self._attach_grow_map(zone)
 
     def get_device_state(self, device_id: str) -> dict[str, Any]:
         return deepcopy(self._devices.get(device_id, DeviceRecord(device_id=device_id).model_dump()))
 
     def get_current_state(self) -> dict[str, Any]:
+        zones = {zone_id: self._attach_grow_map(deepcopy(zone)) for zone_id, zone in self._zones.items()}
         return {
             "devices": deepcopy(self._devices),
-            "zones": deepcopy(self._zones),
+            "zones": zones,
             "global": deepcopy(self._global_state),
             "commands": deepcopy(self._commands),
             "executions": deepcopy(self._executions),
@@ -697,4 +729,3 @@ def build_state_store(config: SqliteConfig, backend: str = "sqlite") -> StateSto
     if backend == "memory":
         return MemoryStateStore()
     return SQLiteStateStore(config)
-

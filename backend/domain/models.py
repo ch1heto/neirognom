@@ -67,6 +67,7 @@ class TrayZoneRecord(DomainModel):
     shared_line_restricted: bool = False
     blocked: bool = False
     maintenance_mode: bool = False
+    crop_id: str = ""
     cooldown_sec: int = Field(default=0, ge=0)
     max_duration_per_run_sec: int = Field(default=0, ge=0)
     max_open_duration_sec: int = Field(default=0, ge=0)

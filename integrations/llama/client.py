@@ -68,6 +68,8 @@ class LlamaDecisionClient:
             "CRITICAL: DO NOT echo back the input telemetry. "
             "CRITICAL: DO NOT include input fields like device_id, ts_ms, sensor, value, message_id, trace_id, current_state, telemetry_windows, or allowed_actions in your output. "
             "CRITICAL: ONLY return fields allowed by the response schema. "
+            "Compare the current sensor telemetry against the ideal parameters in zone_state.grow_map and the limits in global_limits. "
+            "If sensors deviate from the grow_map targets, take corrective action such as dose_solution or open_valve when that action is allowed and justified. "
             "The JSON must match this exact schema with no extra fields: "
             '{"decision":"no_action|open_valve|close_valve|dose_solution",'
             '"zone_id":"string","requested_duration_sec":"integer|null","dose_ml":"integer|null",'
@@ -104,4 +106,3 @@ class LlamaDecisionClient:
             if isinstance(value, str):
                 return value
         return None
-

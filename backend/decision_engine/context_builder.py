@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 from backend.config import BackendConfig
@@ -13,14 +15,26 @@ class DecisionContextBuilder:
         self._config = config
         self._store = store
         self._telemetry_history = telemetry_history
+        self._critical_thresholds = self._load_critical_thresholds()
+
+    def _load_critical_thresholds(self) -> dict[str, Any]:
+        path = Path(__file__).resolve().parents[2] / "knowledge_base" / "alerts" / "critical_thresholds.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
 
     def build(self, message: TelemetryMessage) -> LlmDecisionRequest:
         current_state = self._store.get_current_state()
-        zone_state = self._store.get_zone_state(message.zone_id)
+        zone_state = dict(self._store.get_zone_state(message.zone_id))
+        zone_state["grow_map"] = zone_state.get("grow_map") or {}
         device_state = self._store.get_device_state(message.device_id)
         global_state = current_state.get("global", {})
         automation_flags = current_state.get("automation_flags", {})
         telemetry_windows = self._telemetry_windows(message)
+        global_limits = dict(global_state)
+        global_limits["critical_thresholds"] = self._critical_thresholds
 
         return LlmDecisionRequest(
             trace_id=message.trace_id,
@@ -30,7 +44,7 @@ class DecisionContextBuilder:
             device_state=device_state,
             global_state=global_state,
             zone_limits={k: v for k, v in zone_state.items() if k not in {"telemetry", "device_state"}},
-            global_limits=dict(global_state),
+            global_limits=global_limits,
             active_safety_locks=self._active_safety_locks(message.device_id, message.zone_id),
             active_alarms=self._active_alarms(message.device_id, message.zone_id),
             automation_flags=automation_flags,
@@ -111,4 +125,3 @@ class DecisionContextBuilder:
                 )
             )
         return actions
-
