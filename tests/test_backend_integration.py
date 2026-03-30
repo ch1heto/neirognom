@@ -24,7 +24,7 @@ class BackendIntegrationTests(unittest.TestCase):
         zone = harness.store.get_zone_state("tray_1")
         self.assertEqual(zone["telemetry"]["soil_moisture"], 12.0)
         self.assertEqual(len(harness.mqtt.published), 1)
-        self.assertEqual(harness.mqtt.published[0]["topic"], "greenhouse/device/esp32-1/cmd/execute")
+        self.assertEqual(harness.mqtt.published[0]["topic"], "greenhouse/device/esp32-1/cmd")
         self.assertEqual(harness.mqtt.published[0]["payload"]["step"], "open_valve")
 
     def test_duplicate_mqtt_message_is_ignored_and_audited(self) -> None:

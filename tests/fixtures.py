@@ -11,16 +11,20 @@ def telemetry_payload(
     zone_id: str = "tray_1",
     ts_ms: int = 1_000,
     local_ts_ms: int | None = None,
+    message_counter: int = 1,
     sensors: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "message_id": message_id,
-        "trace_id": trace_id,
+        "correlation_id": trace_id,
         "device_id": device_id,
         "zone_id": zone_id,
-        "ts_ms": ts_ms,
-        "local_ts_ms": local_ts_ms if local_ts_ms is not None else ts_ms,
+        "timestamp": ts_ms,
+        "local_timestamp": local_ts_ms if local_ts_ms is not None else ts_ms,
+        "message_counter": message_counter,
         "sensors": sensors or {"soil_moisture": 25.0, "temperature": 24.0, "tank_level": 80.0},
+        "status": {},
+        "meta": {},
     }
 
 
@@ -31,17 +35,21 @@ def device_state_payload(
     device_id: str = "esp32-1",
     zone_id: str = "tray_1",
     ts_ms: int = 1_000,
+    message_counter: int = 1,
     connectivity: str = "online",
     state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "message_id": message_id,
-        "trace_id": trace_id,
+        "correlation_id": trace_id,
         "device_id": device_id,
         "zone_id": zone_id,
-        "ts_ms": ts_ms,
+        "timestamp": ts_ms,
+        "message_counter": message_counter,
         "connectivity": connectivity,
         "state": state or {"pump_on": False, "valve_open": False},
+        "status": {},
+        "meta": {},
     }
 
 
@@ -76,20 +84,23 @@ def ack_payload(
     observed_state: dict[str, Any] | None = None,
     error_code: str | None = None,
     error_message: str = "",
+    status_code: str = "",
 ) -> dict[str, Any]:
     return {
         "message_id": message_id,
-        "trace_id": trace_id,
+        "correlation_id": trace_id,
         "command_id": command_id,
         "execution_id": execution_id,
         "step": step,
         "device_id": device_id,
         "zone_id": zone_id,
         "status": status,
-        "local_timestamp_ms": local_timestamp_ms,
+        "local_timestamp": local_timestamp_ms,
         "observed_state": observed_state or {},
+        "source": "device",
         "error_code": error_code,
         "error_message": error_message,
+        "status_code": status_code or (error_code or status),
     }
 
 
@@ -108,19 +119,22 @@ def result_payload(
     metrics: dict[str, Any] | None = None,
     error_code: str | None = None,
     error_message: str = "",
+    status_code: str = "",
 ) -> dict[str, Any]:
     return {
         "message_id": message_id,
-        "trace_id": trace_id,
+        "correlation_id": trace_id,
         "command_id": command_id,
         "execution_id": execution_id,
         "step": step,
         "device_id": device_id,
         "zone_id": zone_id,
         "status": status,
-        "local_timestamp_ms": local_timestamp_ms,
+        "local_timestamp": local_timestamp_ms,
         "observed_state": observed_state or {},
         "metrics": metrics or {},
+        "source": "device",
         "error_code": error_code,
         "error_message": error_message,
+        "status_code": status_code or (error_code or status),
     }

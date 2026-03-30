@@ -21,6 +21,7 @@ from backend.state.store import build_state_store
 from integrations.llama.client import LlamaDecisionClient
 from integrations.openclaw_mcp.server import OpenClawMcpServer
 from integrations.openclaw_mcp.tools import OpenClawMcpAdapter
+from mqtt.topics import ingestion_subscription_topics
 
 
 log = logging.getLogger("backend.runtime")
@@ -80,13 +81,7 @@ class BackendRuntime:
             self.security_monitor.auth_failed(reason_text)
             log.error("backend mqtt connect rejected reason_code=%s", reason_code)
             return
-        subscriptions = [
-            ("greenhouse/device/+/telemetry/raw", self.config.mqtt.qos_default),
-            ("greenhouse/device/+/state", self.config.mqtt.qos_default),
-            ("greenhouse/device/+/cmd/ack", self.config.mqtt.qos_default),
-            ("greenhouse/device/+/cmd/result", self.config.mqtt.qos_default),
-            ("greenhouse/device/+/event/error", self.config.mqtt.qos_default),
-        ]
+        subscriptions = ingestion_subscription_topics(self.config.mqtt.qos_default)
         for topic, qos in subscriptions:
             client.subscribe(topic, qos=qos)
         self.security_monitor.broker_connected()

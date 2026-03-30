@@ -12,8 +12,8 @@ from backend.dispatcher.service import CommandDispatcher
 from backend.security.monitor import SecurityMonitor
 from backend.state.influx import TelemetryHistoryStore
 from backend.state.store import StateStore
-from mqtt.topics import CMD_ACK_SUFFIX, CMD_RESULT_SUFFIX, ERROR_SUFFIX, STATE_SUFFIX, TELEMETRY_RAW_SUFFIX, parse_topic
-from shared.contracts.messages import CommandAck, CommandResult, DeviceStateMessage, TelemetryMessage
+from mqtt.topics import ACK_SUFFIX, EVENTS_SUFFIX, PRESENCE_SUFFIX, RESULT_SUFFIX, STATE_SUFFIX, TELEMETRY_SUFFIX, parse_topic
+from shared.contracts.messages import CommandAck, CommandResult, DeviceStateMessage, EventEnvelope, PresenceMessage, TelemetryMessage
 
 
 log = logging.getLogger("backend.ingestion")
@@ -42,11 +42,12 @@ class IngestionService:
             return
 
         payload.setdefault("device_id", parsed.device_id)
-        payload.setdefault("trace_id", payload.get("message_id") or f"trace-{uuid.uuid4().hex[:12]}")
+        payload.setdefault("zone_id", parsed.zone_id)
+        payload.setdefault("correlation_id", payload.get("trace_id") or payload.get("message_id") or f"trace-{uuid.uuid4().hex[:12]}")
 
         try:
-            if parsed.channel == TELEMETRY_RAW_SUFFIX:
-                payload.setdefault("ts_ms", int(time.time() * 1000))
+            if parsed.channel == TELEMETRY_SUFFIX:
+                payload.setdefault("timestamp", int(time.time() * 1000))
                 message = TelemetryMessage.model_validate(payload)
                 if self._state_store.seen_message(message.message_id):
                     self._state_store.note_incident("replay_suspected", {"topic": topic, "message_id": message.message_id, "device_id": message.device_id, "zone_id": message.zone_id, "trace_id": message.trace_id})
@@ -62,7 +63,7 @@ class IngestionService:
                 return
 
             if parsed.channel == STATE_SUFFIX:
-                payload.setdefault("ts_ms", int(time.time() * 1000))
+                payload.setdefault("timestamp", int(time.time() * 1000))
                 message = DeviceStateMessage.model_validate(payload)
                 if self._state_store.seen_message(message.message_id):
                     self._state_store.note_incident("replay_suspected", {"topic": topic, "message_id": message.message_id, "device_id": message.device_id, "zone_id": message.zone_id, "trace_id": message.trace_id})
@@ -72,7 +73,31 @@ class IngestionService:
                 log.info("state update device_id=%s zone_id=%s trace_id=%s", message.device_id, message.zone_id, message.trace_id)
                 return
 
-            if parsed.channel == CMD_ACK_SUFFIX:
+            if parsed.channel == PRESENCE_SUFFIX:
+                payload.setdefault("timestamp", int(time.time() * 1000))
+                message = PresenceMessage.model_validate(payload)
+                if self._state_store.seen_message(message.message_id):
+                    self._state_store.note_incident("replay_suspected", {"topic": topic, "message_id": message.message_id, "device_id": message.device_id, "zone_id": message.zone_id, "trace_id": message.trace_id})
+                    return
+                self._state_store.write_device_state(
+                    DeviceStateMessage(
+                        message_id=message.message_id,
+                        correlation_id=message.correlation_id,
+                        device_id=message.device_id,
+                        zone_id=message.zone_id,
+                        timestamp=message.timestamp,
+                        connectivity=message.connectivity,
+                        state={},
+                        message_counter=message.message_counter,
+                        status=message.status,
+                        meta=message.meta,
+                    )
+                )
+                self._security_monitor.device_seen(message.device_id, message.zone_id, message.trace_id)
+                log.info("presence update device_id=%s zone_id=%s trace_id=%s", message.device_id, message.zone_id, message.trace_id)
+                return
+
+            if parsed.channel == ACK_SUFFIX:
                 ack = CommandAck.model_validate(payload)
                 if self._state_store.seen_message(ack.message_id):
                     self._state_store.note_incident("replay_suspected", {"topic": topic, "message_id": ack.message_id, "device_id": ack.device_id, "zone_id": ack.zone_id, "trace_id": ack.trace_id, "command_id": ack.command_id})
@@ -81,7 +106,7 @@ class IngestionService:
                 log.info("ack receive command_id=%s device_id=%s zone_id=%s", ack.command_id, ack.device_id, ack.zone_id)
                 return
 
-            if parsed.channel == CMD_RESULT_SUFFIX:
+            if parsed.channel == RESULT_SUFFIX:
                 result = CommandResult.model_validate(payload)
                 if self._state_store.seen_message(result.message_id):
                     self._state_store.note_incident("replay_suspected", {"topic": topic, "message_id": result.message_id, "device_id": result.device_id, "zone_id": result.zone_id, "trace_id": result.trace_id, "command_id": result.command_id})
@@ -94,9 +119,21 @@ class IngestionService:
             log.error("validation fail topic=%s error=%s", topic, exc)
             return
 
-        if parsed.channel == ERROR_SUFFIX:
-            self._state_store.note_incident("device_error", payload)
-            log.error("device error device_id=%s payload=%s", parsed.device_id, json.dumps(payload, ensure_ascii=False))
+        if parsed.channel == EVENTS_SUFFIX:
+            try:
+                payload.setdefault("event_id", payload.get("message_id") or f"event-{uuid.uuid4().hex[:12]}")
+                payload.setdefault("timestamp", int(time.time() * 1000))
+                payload.setdefault("source", "device" if parsed.scope == "device" else "system")
+                payload.setdefault("category", "device_event" if parsed.scope == "device" else "system_event")
+                payload.setdefault("severity", "warning")
+                payload.setdefault("message", str(payload.get("message") or payload.get("error_message") or payload.get("error_code") or "event"))
+                event = EventEnvelope.model_validate(payload)
+            except ValidationError as exc:
+                self._state_store.note_incident("validation_fail", {"topic": topic, "error": str(exc), "payload": payload})
+                log.error("validation fail topic=%s error=%s", topic, exc)
+                return
+            self._state_store.note_incident("system_event", event.model_dump())
+            log.error("event receive scope=%s device_id=%s payload=%s", parsed.scope, parsed.device_id, json.dumps(event.model_dump(), ensure_ascii=False))
             return
 
         log.warning("ingest receive unhandled_channel=%s topic=%s", parsed.channel, topic)

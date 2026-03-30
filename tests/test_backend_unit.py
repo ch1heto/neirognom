@@ -3,27 +3,87 @@ from __future__ import annotations
 import unittest
 
 from backend.safety.validator import ActionProposal
-from mqtt.topics import CMD_ACK_SUFFIX, TELEMETRY_RAW_SUFFIX, parse_topic
-from shared.contracts.messages import DecisionOrigin
+from mqtt.topics import ACK_SUFFIX, EVENTS_SUFFIX, PRESENCE_SUFFIX, TELEMETRY_SUFFIX, parse_topic, presence_topic, system_events_topic, zone_telemetry_topic
+from shared.contracts.messages import CommandAck, DecisionOrigin, TelemetryMessage
 from tests.fixtures import device_state_payload, telemetry_payload
 from tests.harness import BackendTestHarness
 
 
 class BackendUnitTests(unittest.TestCase):
     def test_topic_routing_parses_known_channels(self) -> None:
-        parsed = parse_topic("greenhouse/device/esp32-1/telemetry/raw")
+        parsed = parse_topic("greenhouse/device/esp32-1/telemetry")
         self.assertIsNotNone(parsed)
         assert parsed is not None
         self.assertEqual(parsed.device_id, "esp32-1")
-        self.assertEqual(parsed.channel, TELEMETRY_RAW_SUFFIX)
+        self.assertEqual(parsed.channel, TELEMETRY_SUFFIX)
+        self.assertFalse(parsed.is_legacy)
 
-        ack = parse_topic("greenhouse/device/esp32-1/cmd/ack")
+        legacy = parse_topic("greenhouse/device/esp32-1/telemetry/raw")
+        self.assertIsNotNone(legacy)
+        assert legacy is not None
+        self.assertEqual(legacy.channel, TELEMETRY_SUFFIX)
+        self.assertTrue(legacy.is_legacy)
+        self.assertEqual(legacy.canonical_topic, "greenhouse/device/esp32-1/telemetry")
+
+        ack = parse_topic("greenhouse/device/esp32-1/ack")
         self.assertIsNotNone(ack)
         assert ack is not None
-        self.assertEqual(ack.channel, CMD_ACK_SUFFIX)
+        self.assertEqual(ack.channel, ACK_SUFFIX)
+
+        zone = parse_topic(zone_telemetry_topic("tray_1"))
+        self.assertIsNotNone(zone)
+        assert zone is not None
+        self.assertEqual(zone.scope, "zone")
+        self.assertEqual(zone.zone_id, "tray_1")
+
+        presence = parse_topic(presence_topic("esp32-1"))
+        self.assertIsNotNone(presence)
+        assert presence is not None
+        self.assertEqual(presence.channel, PRESENCE_SUFFIX)
+
+        system = parse_topic(system_events_topic())
+        self.assertIsNotNone(system)
+        assert system is not None
+        self.assertEqual(system.channel, EVENTS_SUFFIX)
 
         self.assertIsNone(parse_topic("greenhouse/device/esp32-1/unknown"))
         self.assertIsNone(parse_topic("invalid/topic"))
+
+    def test_contract_models_accept_canonical_and_legacy_fields(self) -> None:
+        telemetry = TelemetryMessage.model_validate(
+            {
+                "message_id": "msg-telemetry-canonical-0001",
+                "correlation_id": "corr-telemetry-canonical-0001",
+                "device_id": "esp32-1",
+                "zone_id": "tray_1",
+                "timestamp": 1_000,
+                "message_counter": 7,
+                "sensors": {"soil_moisture": 21.5},
+                "status": {"online": True},
+                "meta": {"firmware": "1.0.0"},
+            }
+        )
+        self.assertEqual(telemetry.ts_ms, 1_000)
+        self.assertEqual(telemetry.trace_id, "corr-telemetry-canonical-0001")
+        self.assertEqual(telemetry.message_counter, 7)
+
+        ack = CommandAck.model_validate(
+            {
+                "message_id": "msg-ack-legacy-0001",
+                "trace_id": "trace-ack-legacy-0001",
+                "command_id": "cmd-ack-legacy-0001",
+                "execution_id": "exec-ack-legacy1",
+                "step": "open_valve",
+                "device_id": "esp32-1",
+                "zone_id": "tray_1",
+                "status": "acked",
+                "local_timestamp_ms": 1_100,
+                "observed_state": {},
+            }
+        )
+        self.assertEqual(ack.correlation_id, "trace-ack-legacy-0001")
+        self.assertEqual(ack.local_timestamp, 1_100)
+        self.assertEqual(ack.status_code, "acked")
 
     def test_command_record_normalizes_action_and_binds_nonce(self) -> None:
         harness = BackendTestHarness(command_ttl_sec=15)
@@ -82,8 +142,6 @@ class BackendUnitTests(unittest.TestCase):
             "reason": "llama fallback",
             "confidence": 0.75,
         }
-
-        from shared.contracts.messages import TelemetryMessage
 
         proposal = harness.decision_engine.evaluate_telemetry(
             TelemetryMessage.model_validate(

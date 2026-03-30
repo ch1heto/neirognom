@@ -12,8 +12,8 @@ from backend.config import BackendConfig
 from backend.domain.models import AuditLogRecord, CommandExecutionRecord, ExecutionPhase, SafetyLockRecord
 from backend.safety.validator import ActionProposal, SafetyValidator
 from backend.state.store import StateStore
-from mqtt.topics import command_execute_topic
-from shared.contracts.messages import ActuatorCommandMessage, CommandAck, CommandLifecycle, CommandResult, SafetyConstraints
+from mqtt.topics import command_topic
+from shared.contracts.messages import ActuatorCommandMessage, CommandAck, CommandLifecycle, CommandResult, SafetyCaps
 
 
 log = logging.getLogger("backend.execution")
@@ -249,27 +249,30 @@ class IrrigationOrchestrator:
         execution = self._store.get_execution(execution_id)
         if command is None or execution is None:
             return {"status": "missing_command"}
+        created_at_ms = int(time.time() * 1000)
+        ttl_sec = max(0, (int(command["expires_at_ms"]) - created_at_ms + 999) // 1000)
         message = ActuatorCommandMessage(
             message_id=f"msg-{uuid.uuid4().hex[:12]}",
-            trace_id=command["trace_id"],
             command_id=command_id,
-            execution_id=execution_id,
-            device_id=command["device_id"],
-            zone_id=command["zone_id"],
-            actuator=actuator,
+            correlation_id=command["trace_id"],
+            source=str(command.get("requested_by") or "backend"),
+            target_device_id=command["device_id"],
+            target_zone_id=command["zone_id"],
             action=action,
-            step=step,
-            issued_at_ms=int(time.time() * 1000),
-            expires_at_ms=int(command["expires_at_ms"]),
-            nonce=str(command.get("metadata", {}).get("nonce") or f"nonce-{uuid.uuid4().hex[:16]}"),
-            max_duration_ms=max_duration_ms,
-            safety_constraints=SafetyConstraints(
+            duration_sec=max(0, max_duration_ms // 1000),
+            ttl_sec=ttl_sec,
+            created_at=created_at_ms,
+            safety_caps=SafetyCaps(
                 local_hard_max_duration_ms=max_duration_ms or int(self._config.global_safety.master_pump_timeout_sec * 1000),
-                allowed_runtime_window_ms=max(0, int(command["expires_at_ms"]) - int(time.time() * 1000)),
+                allowed_runtime_window_ms=max(0, int(command["expires_at_ms"]) - created_at_ms),
             ),
+            execution_id=execution_id,
+            actuator=actuator,
+            step=step,
+            nonce=str(command.get("metadata", {}).get("nonce") or f"nonce-{uuid.uuid4().hex[:16]}"),
             parameters=parameters,
         )
-        result = self._mqtt.publish(command_execute_topic(command["device_id"]), json.dumps(message.model_dump(), ensure_ascii=False), qos=self._config.mqtt.qos_default)
+        result = self._mqtt.publish(command_topic(command["device_id"]), json.dumps(message.model_dump(), ensure_ascii=False), qos=self._config.mqtt.qos_default)
         lifecycle = CommandLifecycle.DISPATCHED if result.rc == mqtt.MQTT_ERR_SUCCESS else CommandLifecycle.FAILED
         if execution.get("metadata", {}).get("aborting"):
             lifecycle = CommandLifecycle(execution.get("metadata", {}).get("terminal_lifecycle") or command["lifecycle"])

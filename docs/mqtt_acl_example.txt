@@ -2,27 +2,31 @@
 
 # Backend identity
 user greenhouse-backend
-topic read greenhouse/device/+/telemetry/raw
+topic read greenhouse/device/+/telemetry
+topic read greenhouse/zone/+/telemetry
 topic read greenhouse/device/+/state
-topic read greenhouse/device/+/cmd/ack
-topic read greenhouse/device/+/cmd/result
-topic read greenhouse/device/+/event/error
-topic write greenhouse/device/+/cmd/execute
+topic read greenhouse/device/+/ack
+topic read greenhouse/device/+/result
+topic read greenhouse/device/+/presence
+topic read greenhouse/system/events
+topic write greenhouse/device/+/cmd
 
 # Device esp32-1
 user esp32-1
-topic write greenhouse/device/esp32-1/telemetry/raw
+topic write greenhouse/device/esp32-1/telemetry
+topic write greenhouse/zone/tray_1/telemetry
 topic write greenhouse/device/esp32-1/state
-topic write greenhouse/device/esp32-1/cmd/ack
-topic write greenhouse/device/esp32-1/cmd/result
-topic write greenhouse/device/esp32-1/event/error
-topic read greenhouse/device/esp32-1/cmd/execute
+topic write greenhouse/device/esp32-1/ack
+topic write greenhouse/device/esp32-1/result
+topic write greenhouse/device/esp32-1/presence
+topic read greenhouse/device/esp32-1/cmd
 
 # Device esp32-2
 user esp32-2
-topic write greenhouse/device/esp32-2/telemetry/raw
+topic write greenhouse/device/esp32-2/telemetry
+topic write greenhouse/zone/tray_2/telemetry
 topic write greenhouse/device/esp32-2/state
-topic write greenhouse/device/esp32-2/cmd/ack
-topic write greenhouse/device/esp32-2/cmd/result
-topic write greenhouse/device/esp32-2/event/error
-topic read greenhouse/device/esp32-2/cmd/execute
+topic write greenhouse/device/esp32-2/ack
+topic write greenhouse/device/esp32-2/result
+topic write greenhouse/device/esp32-2/presence
+topic read greenhouse/device/esp32-2/cmd

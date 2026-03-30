@@ -132,8 +132,8 @@ It is not used for command state, safety locks, leases, alarms, or execution rec
 - No LLM/OpenClaw/UI path sends actuator commands directly.
 - All manual actions go through backend validation and orchestration.
 - Command idempotency is keyed by `command_id`.
-- Commands support `expires_at_ms`.
-- Commands include a per-command `nonce` and explicit `safety_constraints`.
+- Commands support `ttl_sec` and carry `created_at` in the transport envelope.
+- Commands include a per-command `nonce` and explicit `safety_caps`.
 - Backend rejects unknown, mismatched, replay-suspected, and malformed ACK/RESULT messages.
 - Broker disconnects, auth failures, stale heartbeats, empty tank, leak suspicion, and critical anomalies create persistent SQLite locks/alarms.
 - Dangerous actions are audit logged.

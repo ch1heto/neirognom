@@ -5,22 +5,23 @@
 Backend publishes only `ActuatorCommandMessage`:
 
 - `message_id`
-- `trace_id`
 - `command_id`
-- `execution_id`
-- `device_id`
-- `zone_id`
-- `actuator`
+- `correlation_id`
+- `source`
+- `target_device_id`
+- `target_zone_id`
 - `action`
+- `duration_sec`
+- `ttl_sec`
+- `created_at`
+- `safety_caps`
+- `execution_id`
+- `actuator`
 - `step`
-- `issued_at_ms`
-- `expires_at_ms`
 - `nonce`
-- `max_duration_ms`
-- `safety_constraints`
 - `parameters`
 
-`safety_constraints` contains:
+`safety_caps` contains:
 
 - `require_backend_safety`
 - `reject_if_offline`
@@ -35,15 +36,17 @@ Backend publishes only `ActuatorCommandMessage`:
 Devices publish only `CommandAck`:
 
 - `message_id`
-- `trace_id`
+- `correlation_id`
 - `command_id`
 - `execution_id`
 - `step`
 - `device_id`
 - `zone_id`
 - `status`
-- `local_timestamp_ms`
+- `local_timestamp`
 - `observed_state`
+- `source`
+- `status_code`
 - `error_code`
 - `error_message`
 
@@ -61,16 +64,18 @@ Allowed `status`:
 Devices publish only `CommandResult`:
 
 - `message_id`
-- `trace_id`
+- `correlation_id`
 - `command_id`
 - `execution_id`
 - `step`
 - `device_id`
 - `zone_id`
 - `status`
-- `local_timestamp_ms`
+- `local_timestamp`
 - `observed_state`
 - `metrics`
+- `source`
+- `status_code`
 - `error_code`
 - `error_message`
 
@@ -83,11 +88,11 @@ Allowed `status`:
 
 ## Device-side rules
 
-- Accept only commands where `device_id` matches the device identity burned into firmware or secure config.
-- Reject any command where `expires_at_ms <= local_time_ms`.
+- Accept only commands where `target_device_id` matches the device identity burned into firmware or secure config.
+- Reject any command where `created_at + ttl_sec*1000 <= local_time_ms`.
 - Keep a bounded replay cache of recent `command_id` values and reject duplicates.
 - Keep a bounded replay cache of recent `nonce` values inside the active TTL window.
-- Apply `effective_max_runtime_ms = min(max_duration_ms, safety_constraints.local_hard_max_duration_ms, device_local_hard_limit_ms)`.
+- Apply `effective_max_runtime_ms = min(duration_sec*1000, safety_caps.local_hard_max_duration_ms, device_local_hard_limit_ms)`.
 - Enter fail-safe if backend heartbeat or MQTT session is stale.
 - Never execute commands that arrive from any topic other than the backend command topic.
 
@@ -109,7 +114,7 @@ Backend rejects and audit-logs:
 - Backend stores `command_id` and `execution_id` in SQLite.
 - Backend rejects duplicate inbound `message_id` values.
 - Devices should maintain a local recent-command cache keyed by `command_id` and `nonce`.
-- All commands are TTL-bound by `expires_at_ms`.
+- All commands are TTL-bound by `ttl_sec`.
 
 ## Heartbeat staleness
 

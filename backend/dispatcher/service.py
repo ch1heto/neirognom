@@ -19,7 +19,9 @@ class CommandDispatcher:
         return self._orchestrator.start(proposal)
 
     def observe_telemetry(self, message: TelemetryMessage) -> None:
-        self._orchestrator.observe_telemetry(message.model_dump())
+        payload = message.model_dump()
+        payload["ts_ms"] = message.ts_ms
+        self._orchestrator.observe_telemetry(payload)
 
     def handle_ack(self, ack: CommandAck) -> dict[str, Any] | None:
         return self._orchestrator.handle_ack(ack)
