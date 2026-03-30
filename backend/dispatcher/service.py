@@ -29,6 +29,9 @@ class CommandDispatcher:
     def handle_result(self, result: CommandResult) -> dict[str, Any] | None:
         return self._orchestrator.handle_result(result)
 
+    def handle_device_offline(self, device_id: str, zone_id: str | None, reason: str, trace_id: str) -> None:
+        self._orchestrator.handle_device_offline(device_id, zone_id, reason, trace_id)
+
     def recover_active_executions(self) -> None:
         self._orchestrator.recover_active_executions()
 

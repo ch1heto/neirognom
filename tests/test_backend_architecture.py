@@ -419,6 +419,42 @@ class BackendArchitectureTests(unittest.TestCase):
         self.assertTrue(any(lock["kind"] == "stale_heartbeat" for lock in locks))
         self.assertTrue(any(alarm["category"] == "stale_heartbeat" for alarm in alarms))
 
+    def test_stale_heartbeat_blocks_new_commands_without_marking_device_offline(self) -> None:
+        _, store, _, validator, dispatcher, telemetry_history, security_monitor = self._build_stack()
+        stale_at = int(time.time() * 1000) - 200_000
+        store.write_device_state(
+            DeviceStateMessage(
+                message_id="msg-state-stale-block",
+                trace_id="trace-state-stale-block",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                ts_ms=stale_at,
+                connectivity=DeviceConnectivity.ONLINE,
+                state={"pump_on": False, "valve_open": False},
+            )
+        )
+        security_monitor.sweep(now_ms=stale_at + 200_000)
+
+        decision = validator.validate(
+            store,
+            ActionProposal(
+                trace_id="trace-stale-block",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                actuator="irrigation_sequence",
+                action="START",
+                duration_sec=5,
+                origin=DecisionOrigin.OPERATOR,
+                reason="stale heartbeat test",
+                requested_at_ms=stale_at + 200_100,
+            ),
+        )
+
+        self.assertFalse(decision.allowed)
+        self.assertIn("device_lock:stale_heartbeat", decision.reasons)
+        self.assertEqual(store.get_device_state("esp32-1")["connectivity"], DeviceConnectivity.ONLINE.value)
+        self.assertIsNone(store.get_device_state("esp32-1").get("fault_reason"))
+
     def test_security_monitor_flags_flow_anomaly_from_history(self) -> None:
         _, store, _, _, _, telemetry_history, security_monitor = self._build_stack()
         message = TelemetryMessage.model_validate(

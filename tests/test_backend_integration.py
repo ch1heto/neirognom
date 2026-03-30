@@ -7,7 +7,7 @@ from unittest import mock
 from backend.domain.models import ExecutionState
 from mqtt.topics import telemetry_topic
 from shared.contracts.messages import CommandLifecycle
-from tests.fixtures import ack_payload, device_state_payload, result_payload, telemetry_payload
+from tests.fixtures import ack_payload, device_state_payload, presence_payload, result_payload, telemetry_payload
 from tests.harness import BackendTestHarness
 
 
@@ -158,6 +158,137 @@ class BackendIntegrationTests(unittest.TestCase):
         self.assertEqual(len(harness.telemetry_history._history), 0)
         self.assertEqual(len(harness.mqtt.published), 0)
         self.assertTrue(any(entry["message"] == "validation_fail" for entry in harness.store._audit_logs if entry["action_type"] == "INCIDENT"))
+
+    def test_active_execution_faults_deterministically_on_offline_presence(self) -> None:
+        harness = BackendTestHarness()
+        harness.seed_device_state(device_state_payload())
+        response = harness.execute_manual_action(
+            {
+                "trace_id": "trace-offline-active-0001",
+                "command_id": "cmd-offline-active-0001",
+                "device_id": "esp32-1",
+                "zone_id": "tray_1",
+                "actuator": "irrigation_sequence",
+                "action": "START",
+                "duration_sec": 5,
+                "requested_at_ms": 100_000,
+            }
+        )
+        self.assertEqual(response["status"], CommandLifecycle.DISPATCHED.value)
+        self.assertEqual(len(harness.mqtt.published), 1)
+
+        harness.ingest_presence(
+            presence_payload(
+                message_id="msg-presence-offline-0001",
+                trace_id="trace-offline-active-0001",
+                connectivity="offline",
+                ts_ms=100_500,
+            )
+        )
+
+        status = harness.command_status("cmd-offline-active-0001")
+        device = harness.store.get_device_state("esp32-1")
+        zone = harness.store.get_zone_state("tray_1")
+        assert status is not None
+        self.assertEqual(status["lifecycle"], CommandLifecycle.FAILED.value)
+        self.assertEqual(status["execution"]["execution_state"], ExecutionState.FAULTED.value)
+        self.assertEqual(status["execution"]["last_error"], "device_offline")
+        self.assertEqual(device["connectivity"], "offline")
+        self.assertEqual(device["fault_reason"], "device_offline")
+        self.assertIsNone(zone["reserved_by_execution"])
+        self.assertEqual(len(harness.mqtt.published), 1)
+        self.assertTrue(any(lock["kind"] == "unsafe_execution_contour" for lock in harness.store.get_active_safety_locks("zone", "tray_1")))
+        self.assertTrue(any(lock["kind"] == "device_offline" for lock in harness.store.get_active_safety_locks("device", "esp32-1")))
+
+    def test_offline_device_blocks_new_irrigation_command_after_presence_event(self) -> None:
+        harness = BackendTestHarness()
+        harness.seed_device_state(device_state_payload())
+        harness.ingest_presence(
+            presence_payload(
+                message_id="msg-presence-offline-block-0001",
+                trace_id="trace-offline-block-0001",
+                connectivity="offline",
+                ts_ms=2_000,
+            )
+        )
+
+        response = harness.execute_manual_action(
+            {
+                "trace_id": "trace-offline-block-command-0001",
+                "command_id": "cmd-offline-block-command-0001",
+                "device_id": "esp32-1",
+                "zone_id": "tray_1",
+                "actuator": "irrigation_sequence",
+                "action": "START",
+                "duration_sec": 5,
+                "requested_at_ms": 3_000,
+            }
+        )
+
+        self.assertEqual(response["status"], CommandLifecycle.ABORTED.value)
+        self.assertIn("device_offline", response["reasons"])
+        self.assertEqual(len(harness.mqtt.published), 0)
+
+    def test_repeated_offline_presence_is_idempotent_for_execution_faulting(self) -> None:
+        harness = BackendTestHarness()
+        harness.seed_device_state(device_state_payload())
+        harness.execute_manual_action(
+            {
+                "trace_id": "trace-repeat-offline-0001",
+                "command_id": "cmd-repeat-offline-0001",
+                "device_id": "esp32-1",
+                "zone_id": "tray_1",
+                "actuator": "irrigation_sequence",
+                "action": "START",
+                "duration_sec": 5,
+                "requested_at_ms": 100_000,
+            }
+        )
+
+        offline_payload = presence_payload(
+            message_id="msg-presence-repeat-offline-0001",
+            trace_id="trace-repeat-offline-0001",
+            connectivity="offline",
+            ts_ms=100_500,
+        )
+        harness.ingest_presence(offline_payload)
+        first_status = harness.command_status("cmd-repeat-offline-0001")
+        duplicate = dict(offline_payload)
+        duplicate["message_id"] = "msg-presence-repeat-offline-0002"
+        duplicate["ts_ms"] = 100_600
+        duplicate["timestamp"] = 100_600
+        harness.ingest_presence(duplicate)
+        second_status = harness.command_status("cmd-repeat-offline-0001")
+
+        assert first_status is not None and second_status is not None
+        self.assertEqual(first_status["execution"]["updated_at_ms"], second_status["execution"]["updated_at_ms"])
+        self.assertEqual(first_status["execution"]["last_error"], second_status["execution"]["last_error"])
+        self.assertEqual(len([entry for entry in harness.store._audit_logs if entry["action_type"] == "COMMAND_DEVICE_OFFLINE"]), 1)
+
+    def test_online_presence_clears_offline_fault_fields_and_restores_connectivity(self) -> None:
+        harness = BackendTestHarness()
+        harness.seed_device_state(device_state_payload())
+        harness.ingest_presence(
+            presence_payload(
+                message_id="msg-presence-offline-online-0001",
+                trace_id="trace-offline-online-0001",
+                connectivity="offline",
+                ts_ms=2_000,
+            )
+        )
+        harness.ingest_presence(
+            presence_payload(
+                message_id="msg-presence-online-0001",
+                trace_id="trace-offline-online-0002",
+                connectivity="online",
+                ts_ms=3_000,
+            )
+        )
+
+        device = harness.store.get_device_state("esp32-1")
+        self.assertEqual(device["connectivity"], "online")
+        self.assertIsNone(device["fault_reason"])
+        self.assertFalse(any(lock["kind"] == "device_offline" for lock in harness.store.get_active_safety_locks("device", "esp32-1")))
 
     def test_stale_command_expires_when_no_ack_or_result_arrives(self) -> None:
         harness = BackendTestHarness(command_ttl_sec=1)

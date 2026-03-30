@@ -15,7 +15,7 @@ from backend.security.monitor import SecurityMonitor
 from backend.state.influx import TelemetryHistoryStore
 from backend.state.store import StateStore
 from mqtt.topics import ACK_SUFFIX, EVENTS_SUFFIX, PRESENCE_SUFFIX, RESULT_SUFFIX, STATE_SUFFIX, TELEMETRY_SUFFIX, parse_topic
-from shared.contracts.messages import CommandAck, CommandResult, DeviceStateMessage, EventEnvelope, PresenceMessage, TelemetryMessage
+from shared.contracts.messages import CommandAck, CommandResult, DeviceConnectivity, DeviceStateMessage, EventEnvelope, PresenceMessage, TelemetryMessage
 
 
 log = logging.getLogger("backend.ingestion")
@@ -83,7 +83,7 @@ class IngestionService:
                     self._state_store.note_incident("replay_suspected", {"topic": topic, "message_id": message.message_id, "device_id": message.device_id, "zone_id": message.zone_id, "trace_id": message.trace_id})
                     return
                 self._state_store.write_device_state(message)
-                self._security_monitor.device_seen(message.device_id, message.zone_id, message.trace_id)
+                self._handle_device_connectivity(message.device_id, message.zone_id, message.connectivity, message.trace_id)
                 log.info("state update device_id=%s zone_id=%s trace_id=%s", message.device_id, message.zone_id, message.trace_id)
                 return
 
@@ -107,7 +107,7 @@ class IngestionService:
                         meta=message.meta,
                     )
                 )
-                self._security_monitor.device_seen(message.device_id, message.zone_id, message.trace_id)
+                self._handle_device_connectivity(message.device_id, message.zone_id, message.connectivity, message.trace_id)
                 log.info("presence update device_id=%s zone_id=%s trace_id=%s", message.device_id, message.zone_id, message.trace_id)
                 return
 
@@ -227,3 +227,13 @@ class IngestionService:
         if proposal is not None:
             self._dispatcher.dispatch_proposal(proposal)
         log.info("ingest receive telemetry device_id=%s zone_id=%s trace_id=%s", message.device_id, message.zone_id, message.trace_id)
+
+    def _handle_device_connectivity(self, device_id: str, zone_id: str, connectivity: DeviceConnectivity, trace_id: str) -> None:
+        if connectivity in {DeviceConnectivity.OFFLINE, DeviceConnectivity.SAFE_MODE}:
+            reason = "device_safe_mode" if connectivity == DeviceConnectivity.SAFE_MODE else "device_offline"
+            self._state_store.set_device_fault(device_id, reason, zone_id)
+            self._security_monitor.device_offline(device_id, zone_id, trace_id, reason=reason)
+            self._dispatcher.handle_device_offline(device_id, zone_id, reason, trace_id)
+            return
+        self._state_store.clear_device_fault(device_id)
+        self._security_monitor.device_seen(device_id, zone_id, trace_id)

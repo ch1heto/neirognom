@@ -52,6 +52,8 @@ class DeviceRecord(DomainModel):
     last_telemetry_ms: int | None = Field(default=None, ge=0)
     last_telemetry_counter: int | None = Field(default=None, ge=0)
     last_telemetry_message_id: str | None = None
+    last_error: str | None = None
+    fault_reason: str | None = None
     telemetry: dict[str, Any] = Field(default_factory=dict)
     state: dict[str, Any] = Field(default_factory=dict)
 

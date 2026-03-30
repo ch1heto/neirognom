@@ -89,9 +89,28 @@ class SecurityMonitor:
     def device_seen(self, device_id: str, zone_id: str | None, trace_id: str) -> None:
         self._release_lock("device", device_id, "stale_heartbeat")
         self._clear_alarm(self._alarm_id("stale_heartbeat", device_id, zone_id))
+        self._release_lock("device", device_id, "device_offline")
+        self._clear_alarm(self._alarm_id("device_offline", device_id, zone_id))
+        self._release_lock("device", device_id, "device_safe_mode")
+        self._clear_alarm(self._alarm_id("device_safe_mode", device_id, zone_id))
         self._release_lock("global", "backend-runtime", "mqtt_disconnected")
         self._clear_alarm(self._alarm_id("mqtt_disconnected", "backend", "broker"))
         self._release_lock("global", "backend-runtime", "mqtt_auth_failure")
+
+    def device_offline(self, device_id: str, zone_id: str, trace_id: str, reason: str = "device_offline") -> None:
+        category = "device_safe_mode" if reason == "device_safe_mode" else "device_offline"
+        message_text = "Device entered safe mode; backend fault path applied" if reason == "device_safe_mode" else "Device reported offline; backend fault path applied"
+        self._raise_alarm_and_lock(
+            trace_id=trace_id,
+            device_id=device_id,
+            zone_id=zone_id,
+            scope="device",
+            scope_id=device_id,
+            lock_kind=category,
+            severity="critical",
+            category=category,
+            message_text=message_text,
+        )
 
     def broker_disconnected(self, reason_text: str) -> None:
         now_ms = int(time.time() * 1000)

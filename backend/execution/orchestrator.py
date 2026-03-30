@@ -116,6 +116,15 @@ class IrrigationOrchestrator:
                 if telemetry["sensors"].get("leak") is True or telemetry["sensors"].get("overflow") is True:
                     self._begin_abort(execution["command_id"], execution["execution_id"], "telemetry_anomaly")
 
+    def handle_device_offline(self, device_id: str, zone_id: str | None, reason: str, trace_id: str) -> None:
+        self._store.set_device_fault(device_id, reason, zone_id)
+        for execution in self._store.list_active_executions():
+            if execution["device_id"] != device_id:
+                continue
+            if execution.get("metadata", {}).get("offline_fault_reason") == reason and execution.get("phase") == ExecutionPhase.FINISHED.value:
+                continue
+            self._fault_execution_offline(execution, reason, trace_id)
+
     def handle_ack(self, ack: CommandAck) -> dict[str, Any] | None:
         command = self._store.get_command(ack.command_id)
         if command is None:
@@ -551,6 +560,38 @@ class IrrigationOrchestrator:
             self._begin_abort(command_id, execution_id, reason, terminal_lifecycle=terminal_lifecycle)
             return
         self._finalize_abort(command_id, execution_id, reason)
+
+    def _fault_execution_offline(self, execution: dict[str, Any], reason: str, trace_id: str) -> None:
+        command = self._store.get_command(execution["command_id"])
+        if command is None:
+            return
+        if execution.get("metadata", {}).get("offline_fault_reason") == reason and execution.get("phase") == ExecutionPhase.FINISHED.value:
+            return
+        if execution.get("reserved_lock_id"):
+            self._store.release_safety_lock(execution["reserved_lock_id"])
+        now_ms = int(time.time() * 1000)
+        self._store.update_execution(
+            execution["execution_id"],
+            lifecycle=CommandLifecycle.FAILED,
+            execution_state=ExecutionState.FAULTED,
+            phase=ExecutionPhase.FINISHED,
+            last_error=reason,
+            updated_at_ms=now_ms,
+            metadata_update={
+                "aborting": False,
+                "awaiting_ack": False,
+                "awaiting_result": False,
+                "ack_deadline_ms": None,
+                "result_deadline_ms": None,
+                "terminal_lifecycle": CommandLifecycle.FAILED.value,
+                "offline_fault_reason": reason,
+            },
+            result_payload_update={"completed_at_ms": now_ms, "details": reason},
+        )
+        self._store.update_command(command["command_id"], lifecycle=CommandLifecycle.FAILED, last_error=reason)
+        self._store.mark_zone_error(command["zone_id"], now_ms)
+        self._mark_unsafe_contour(command, execution, reason, CommandLifecycle.FAILED.value)
+        self._audit(trace_id, "COMMAND_DEVICE_OFFLINE", "device offline fault path applied", command["command_id"], execution["execution_id"], command["device_id"], command["zone_id"], {"reason": reason})
 
     def _accumulate_flow(self, execution: dict[str, Any], telemetry: dict[str, Any]) -> None:
         flow_rate = float(telemetry["sensors"].get("flow_rate_ml_per_min") or 0.0)

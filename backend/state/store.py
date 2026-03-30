@@ -44,6 +44,8 @@ class StateStore(Protocol):
     def seen_message(self, message_id: str) -> bool: ...
     def write_telemetry_snapshot(self, message: TelemetryMessage) -> dict[str, Any]: ...
     def write_device_state(self, message: DeviceStateMessage) -> dict[str, Any]: ...
+    def set_device_fault(self, device_id: str, reason: str, zone_id: str | None = None) -> dict[str, Any]: ...
+    def clear_device_fault(self, device_id: str) -> dict[str, Any] | None: ...
     def get_zone_state(self, zone_id: str) -> dict[str, Any]: ...
     def get_device_state(self, device_id: str) -> dict[str, Any]: ...
     def get_current_state(self) -> dict[str, Any]: ...
@@ -175,6 +177,22 @@ class MemoryStateStore:
                 "state": dict(message.state),
             }
         )
+        return deepcopy(device)
+
+    def set_device_fault(self, device_id: str, reason: str, zone_id: str | None = None) -> dict[str, Any]:
+        device = self._devices.setdefault(device_id, DeviceRecord(device_id=device_id, zone_id=zone_id).model_dump())
+        if zone_id:
+            device["zone_id"] = zone_id
+        device["last_error"] = reason
+        device["fault_reason"] = reason
+        return deepcopy(device)
+
+    def clear_device_fault(self, device_id: str) -> dict[str, Any] | None:
+        device = self._devices.get(device_id)
+        if device is None:
+            return None
+        device["last_error"] = None
+        device["fault_reason"] = None
         return deepcopy(device)
 
     def get_zone_state(self, zone_id: str) -> dict[str, Any]:
@@ -558,6 +576,18 @@ class SQLiteStateStore(MemoryStateStore):
         self._upsert_payload("devices", "device_id", message.device_id, device, message.ts_ms)
         self._upsert_payload("zones", "zone_id", message.zone_id, self._zones[message.zone_id], message.ts_ms)
         return device
+
+    def set_device_fault(self, device_id: str, reason: str, zone_id: str | None = None) -> dict[str, Any]:
+        record = super().set_device_fault(device_id, reason, zone_id)
+        self._upsert_payload("devices", "device_id", device_id, self._devices[device_id], _now_ms())
+        return record
+
+    def clear_device_fault(self, device_id: str) -> dict[str, Any] | None:
+        record = super().clear_device_fault(device_id)
+        if record is None:
+            return None
+        self._upsert_payload("devices", "device_id", device_id, self._devices[device_id], _now_ms())
+        return record
 
     def create_or_get_command(self, command: CommandRecord) -> tuple[dict[str, Any], bool]:
         record, created = super().create_or_get_command(command)

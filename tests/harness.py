@@ -18,7 +18,7 @@ from backend.state.influx import MemoryTelemetryHistoryStore
 from backend.state.store import MemoryStateStore
 from integrations.openclaw_mcp.server import OpenClawMcpServer
 from integrations.openclaw_mcp.tools import OpenClawMcpAdapter
-from mqtt.topics import command_ack_topic, command_result_topic, state_topic, telemetry_topic
+from mqtt.topics import command_ack_topic, command_result_topic, presence_topic, state_topic, telemetry_topic
 from shared.contracts.messages import LlmDecisionResponse
 
 
@@ -120,6 +120,9 @@ class BackendTestHarness:
 
     def ingest_state(self, payload: dict[str, Any]) -> None:
         self.ingestion.ingest(state_topic(str(payload["device_id"])), json.dumps(payload).encode("utf-8"))
+
+    def ingest_presence(self, payload: dict[str, Any]) -> None:
+        self.ingestion.ingest(presence_topic(str(payload["device_id"])), json.dumps(payload).encode("utf-8"))
 
     def ingest_ack(self, payload: dict[str, Any]) -> None:
         self.ingestion.ingest(command_ack_topic(str(payload["device_id"])), json.dumps(payload).encode("utf-8"))

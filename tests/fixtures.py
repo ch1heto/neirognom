@@ -53,6 +53,31 @@ def device_state_payload(
     }
 
 
+def presence_payload(
+    *,
+    message_id: str = "msg-presence-0001",
+    trace_id: str = "trace-presence-0001",
+    device_id: str = "esp32-1",
+    zone_id: str = "tray_1",
+    ts_ms: int = 1_000,
+    message_counter: int = 1,
+    connectivity: str = "online",
+    status: dict[str, Any] | None = None,
+    meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "message_id": message_id,
+        "correlation_id": trace_id,
+        "device_id": device_id,
+        "zone_id": zone_id,
+        "timestamp": ts_ms,
+        "message_counter": message_counter,
+        "connectivity": connectivity,
+        "status": status or {},
+        "meta": meta or {},
+    }
+
+
 def llama_water_response(*, zone_id: str = "tray_1", duration_sec: int = 12, confidence: float = 0.87) -> dict[str, Any]:
     return {
         "decision": "water_zone",
