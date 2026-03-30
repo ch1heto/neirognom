@@ -102,13 +102,12 @@ class BackendRuntime:
 
     def run(self) -> None:
         log.info(
-            "backend startup mqtt=%s:%d sqlite=%s influx_enabled=%s llama=%s openclaw_operator_enabled=%s operator_ui=%s openclaw_mcp=%s zones=%s",
+            "backend startup mqtt=%s:%d sqlite=%s influx_enabled=%s llama=%s operator_ui=%s openclaw_mcp=%s zones=%s",
             self.config.mqtt.host,
             self.config.mqtt.port,
             self.config.sqlite.path,
             self.config.influx.enabled,
             self.config.llama.api_url,
-            self.config.openclaw.enabled,
             self.operator_ui.url if self.operator_ui else "disabled",
             self.openclaw_mcp_server.url if self.openclaw_mcp_server else "disabled",
             ",".join(self.config.zone_ids),

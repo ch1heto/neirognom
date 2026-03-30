@@ -44,13 +44,6 @@ class LlamaConfig:
 
 
 @dataclass(frozen=True)
-class OpenClawOperatorConfig:
-    enabled: bool
-    base_url: str
-    api_key: str
-
-
-@dataclass(frozen=True)
 class OperatorUiConfig:
     enabled: bool
     host: str
@@ -106,7 +99,6 @@ class BackendConfig:
     sqlite: SqliteConfig
     influx: InfluxConfig
     llama: LlamaConfig
-    openclaw: OpenClawOperatorConfig
     operator_ui: OperatorUiConfig
     openclaw_mcp: OpenClawMcpConfig
     global_safety: GlobalSafetyConfig
@@ -160,11 +152,6 @@ def load_backend_config() -> BackendConfig:
             model=os.getenv("LLAMA_MODEL", "llama3.1").strip() or "llama3.1",
             timeout_sec=int(os.getenv("LLAMA_TIMEOUT_SEC", os.getenv("LLM_TIMEOUT_SEC", "60"))),
             api_key=os.getenv("LLAMA_API_KEY", "").strip(),
-        ),
-        openclaw=OpenClawOperatorConfig(
-            enabled=os.getenv("OPENCLAW_OPERATOR_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"},
-            base_url=os.getenv("OPENCLAW_OPERATOR_URL", "").strip(),
-            api_key=os.getenv("OPENCLAW_OPERATOR_KEY", "").strip(),
         ),
         operator_ui=OperatorUiConfig(
             enabled=os.getenv("OPERATOR_UI_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"},

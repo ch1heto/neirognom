@@ -5,7 +5,6 @@ This repository now targets a backend-centric greenhouse runtime with a strict e
 Architecture notes:
 
 - Runtime layers: [architecture_layers.md](/V:/work/DIPLOM/testMoskitto/docs/architecture_layers.md)
-- Legacy compatibility map: [legacy_compatibility.md](/V:/work/DIPLOM/testMoskitto/docs/legacy_compatibility.md)
 
 ## Runtime path
 
@@ -24,7 +23,7 @@ Architecture notes:
 - `backend/domain/models.py`
   - `Device`, `TrayZone`, `Command`, `CommandExecution`, `SafetyLock`, `ManualLease`, `Alarm`, `AuditLog`, `AutomationFlag`
 - `backend/config.py`
-  - MQTT, SQLite, InfluxDB, Llama, OpenClaw, zone/global safety config
+  - MQTT, SQLite, InfluxDB, Llama, MCP/operator adapter, zone/global safety config
 - `backend/state/store.py`
   - SQLite operational store and memory test store
 - `backend/state/influx.py`
@@ -57,10 +56,6 @@ Architecture notes:
   - canonical runtime wiring
 - `backend_server.py`
   - canonical entrypoint
-- `legacy/`
-  - isolated bridge-era compatibility modules and diagnostics helpers
-- `smart_bridge.py`
-  - deprecated adapter to the new backend runtime
 
 ## Core entities
 
@@ -143,20 +138,6 @@ It is not used for command state, safety locks, leases, alarms, or execution rec
 - Broker disconnects, auth failures, stale heartbeats, empty tank, leak suspicion, and critical anomalies create persistent SQLite locks/alarms.
 - Dangerous actions are audit logged.
 
-## Legacy Isolation
-
-Legacy bridge-era modules are intentionally isolated under `legacy/`. The old top-level module names are now thin deprecated shims only, kept so older scripts do not break during migration.
-
-- `smart_bridge.py`
-- `command_gateway.py`
-- `control_runtime.py`
-- `dashboard_server.py`
-- `operator_cli.py`
-- `openclaw_client.py`
-- `database.py`
-
-The implementation now lives under `legacy/`; see [legacy_compatibility.md](/V:/work/DIPLOM/testMoskitto/docs/legacy_compatibility.md) for replacement mappings.
-
 ## Security model
 
 - Strict safe command channel and device/backend contract: [security_model.md](/V:/work/DIPLOM/testMoskitto/docs/security_model.md)
@@ -175,7 +156,6 @@ Key variables:
 - `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`
 - `ZONE_IDS`
 - `LLAMA_API_URL`, `LLAMA_MODEL`
-- `OPENCLAW_OPERATOR_ENABLED`, `OPENCLAW_OPERATOR_URL`
 - `OPENCLAW_MCP_ENABLED`, `OPENCLAW_MCP_HOST`, `OPENCLAW_MCP_PORT`
 - `OPENCLAW_MCP_ACTION_TOKEN`, `OPENCLAW_MCP_REQUIRE_ACTION_TOKEN`
 - `BROKER_RECONNECT_LOCK_SEC`
@@ -228,14 +208,8 @@ Or standard discovery:
 
 Additional notes: [testing.md](/V:/work/DIPLOM/testMoskitto/docs/testing.md)
 
-Legacy entrypoint:
-
-```powershell
-.\venv\Scripts\python.exe .\smart_bridge.py
-```
-
 ## Migration notes
 
 - Old `PostgreSQL`/`sqlite_compat` assumptions are removed from the runtime path.
-- Existing OpenClaw-specific modules remain deprecated compatibility artifacts only.
-- If older code still expects direct actuator dispatch, route it through `BackendToolService.execute_manual_action()` or the dispatcher facade instead.
+- Old bridge-era runtime modules and prompts have been removed.
+- If older tooling still expects direct actuator dispatch, route it through `BackendToolService.execute_manual_action()` or the dispatcher facade instead.

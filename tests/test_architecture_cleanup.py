@@ -11,7 +11,7 @@ ACTIVE_CODE_ROOTS = [
     REPO_ROOT / "mqtt",
     REPO_ROOT / "shared",
 ]
-LEGACY_SHIMS = [
+REMOVED_LEGACY_FILES = [
     "command_gateway.py",
     "control_runtime.py",
     "control_config.py",
@@ -20,6 +20,12 @@ LEGACY_SHIMS = [
     "openclaw_client.py",
     "operator_cli.py",
     "dashboard_server.py",
+    "smart_bridge.py",
+    "runtime_profiles.json",
+    "openclaw_policy_schema.json",
+    "system_prompt_core.txt",
+    "system_prompt_schema.txt",
+    "docs/legacy_compatibility.md",
 ]
 BANNED_IMPORT_SNIPPETS = [
     "import database",
@@ -32,16 +38,16 @@ BANNED_IMPORT_SNIPPETS = [
     "from control_runtime",
     "import influx_writer",
     "from influx_writer",
+    "import smart_bridge",
+    "from smart_bridge",
 ]
 
 
 class ArchitectureCleanupTests(unittest.TestCase):
-    def test_legacy_modules_are_isolated_under_legacy_directory(self) -> None:
-        legacy_root = REPO_ROOT / "legacy"
-        self.assertTrue((legacy_root / "__init__.py").exists())
-        for filename in LEGACY_SHIMS:
-            self.assertTrue((REPO_ROOT / filename).exists(), filename)
-            self.assertTrue((legacy_root / filename).exists(), filename)
+    def test_removed_legacy_files_are_absent(self) -> None:
+        for filename in REMOVED_LEGACY_FILES:
+            self.assertFalse((REPO_ROOT / filename).exists(), filename)
+        self.assertFalse((REPO_ROOT / "legacy").exists())
 
     def test_active_runtime_code_does_not_import_legacy_root_modules(self) -> None:
         offenders: list[str] = []
