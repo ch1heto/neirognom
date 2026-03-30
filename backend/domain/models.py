@@ -45,9 +45,15 @@ class DeviceRecord(DomainModel):
 class TrayZoneRecord(DomainModel):
     zone_id: str = Field(min_length=1, max_length=64)
     device_id: str | None = None
+    pump_id: str = "pump_main"
+    line_id: str = ""
+    mutually_exclusive_zones: list[str] = Field(default_factory=list)
+    shared_line_restricted: bool = False
     blocked: bool = False
+    maintenance_mode: bool = False
     cooldown_sec: int = Field(default=0, ge=0)
     max_duration_per_run_sec: int = Field(default=0, ge=0)
+    max_open_duration_sec: int = Field(default=0, ge=0)
     max_runs_per_hour: int = Field(default=0, ge=0)
     max_total_water_per_day_ml: int = Field(default=0, ge=0)
     settle_delay_ms: int = Field(default=0, ge=0)

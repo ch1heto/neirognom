@@ -95,7 +95,9 @@ class MemoryStateStore:
         self._global_state = {
             "emergency_stop": global_safety.emergency_stop,
             "max_simultaneous_zones": global_safety.max_simultaneous_zones,
+            "max_active_lines": global_safety.max_active_lines,
             "master_pump_timeout_sec": global_safety.master_pump_timeout_sec,
+            "pump_cooldown_sec": global_safety.pump_cooldown_sec,
             "total_flow_limit_per_window_ml": global_safety.total_flow_limit_per_window_ml,
             "flow_window_sec": global_safety.flow_window_sec,
             "leak_shutdown_enabled": global_safety.leak_shutdown_enabled,
@@ -114,10 +116,16 @@ class MemoryStateStore:
             existing = self._zones.get(zone.zone_id) or {}
             zone_record = TrayZoneRecord(
                 zone_id=zone.zone_id,
-                device_id=existing.get("device_id"),
+                device_id=existing.get("device_id") or zone.device_id,
+                pump_id=existing.get("pump_id") or zone.pump_id,
+                line_id=existing.get("line_id") or zone.line_id,
+                mutually_exclusive_zones=list(existing.get("mutually_exclusive_zones") or zone.mutually_exclusive_zones),
+                shared_line_restricted=bool(existing.get("shared_line_restricted", zone.shared_line_restricted)),
                 blocked=zone.blocked,
+                maintenance_mode=bool(existing.get("maintenance_mode", zone.maintenance_mode)),
                 cooldown_sec=zone.cooldown_sec,
                 max_duration_per_run_sec=zone.max_duration_per_run_sec,
+                max_open_duration_sec=zone.max_open_duration_sec,
                 max_runs_per_hour=zone.max_runs_per_hour,
                 max_total_water_per_day_ml=zone.max_total_water_per_day_ml,
                 settle_delay_ms=zone.settle_delay_ms,

@@ -52,7 +52,15 @@ class StubLlamaClient:
 
 
 class BackendTestHarness:
-    def __init__(self, *, command_ttl_sec: int | None = None, max_simultaneous_zones: int | None = None, mcp_action_token: str = "test-mcp-token") -> None:
+    def __init__(
+        self,
+        *,
+        command_ttl_sec: int | None = None,
+        max_simultaneous_zones: int | None = None,
+        max_active_lines: int | None = None,
+        pump_cooldown_sec: int | None = None,
+        mcp_action_token: str = "test-mcp-token",
+    ) -> None:
         config = load_backend_config()
         global_safety = config.global_safety
         openclaw_mcp = config.openclaw_mcp
@@ -60,6 +68,10 @@ class BackendTestHarness:
             global_safety = replace(global_safety, command_ttl_sec=command_ttl_sec)
         if max_simultaneous_zones is not None:
             global_safety = replace(global_safety, max_simultaneous_zones=max_simultaneous_zones)
+        if max_active_lines is not None:
+            global_safety = replace(global_safety, max_active_lines=max_active_lines)
+        if pump_cooldown_sec is not None:
+            global_safety = replace(global_safety, pump_cooldown_sec=pump_cooldown_sec)
         openclaw_mcp = replace(openclaw_mcp, action_auth_token=mcp_action_token, require_action_token=True)
         self.config = replace(config, global_safety=global_safety, openclaw_mcp=openclaw_mcp)
 
@@ -102,6 +114,11 @@ class BackendTestHarness:
 
     def execute_manual_action(self, action: dict[str, Any]) -> dict[str, Any]:
         return self.tools.execute_manual_action(action)
+
+    def configure_zone(self, zone_id: str, **changes: Any) -> None:
+        zone = dict(self.store.get_zone_state(zone_id))
+        zone.update(changes)
+        self.store._zones[zone_id] = zone
 
     def last_command_message(self) -> dict[str, Any]:
         if not self.mqtt.published:

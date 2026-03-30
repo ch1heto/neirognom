@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
+from backend.domain.models import AutomationFlagRecord, ManualLeaseRecord, SafetyLockRecord
 from backend.safety.validator import ActionProposal
 from mqtt.topics import ACK_SUFFIX, EVENTS_SUFFIX, PRESENCE_SUFFIX, TELEMETRY_SUFFIX, parse_topic, presence_topic, system_events_topic, zone_telemetry_topic
 from shared.contracts.messages import CommandAck, DecisionOrigin, TelemetryMessage
@@ -131,6 +133,248 @@ class BackendUnitTests(unittest.TestCase):
 
         self.assertFalse(decision.allowed)
         self.assertIn("device_offline", decision.reasons)
+
+    def test_safety_validator_blocks_mutually_exclusive_zone_conflict(self) -> None:
+        harness = BackendTestHarness()
+        harness.seed_device_state(device_state_payload())
+        harness.configure_zone("tray_1", mutually_exclusive_zones=["tray_2"])
+        harness.configure_zone("tray_2", device_id="esp32-2")
+        harness.seed_device_state(device_state_payload(message_id="msg-state-zone2-0001", trace_id="trace-state-zone2-0001", device_id="esp32-2", zone_id="tray_2"))
+        harness.execute_manual_action(
+            {
+                "trace_id": "trace-exclusive-active",
+                "command_id": "cmd-exclusive-active",
+                "device_id": "esp32-2",
+                "zone_id": "tray_2",
+                "actuator": "irrigation_sequence",
+                "action": "START",
+                "duration_sec": 5,
+                "requested_at_ms": 10_000,
+            }
+        )
+
+        decision = harness.validator.validate(
+            harness.store,
+            ActionProposal(
+                trace_id="trace-exclusive-check",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                actuator="irrigation_sequence",
+                action="START",
+                duration_sec=5,
+                origin=DecisionOrigin.OPERATOR,
+                reason="conflict check",
+                requested_at_ms=11_000,
+            ),
+        )
+
+        self.assertFalse(decision.allowed)
+        self.assertIn("mutually_exclusive_zone_active:tray_2", decision.reasons)
+
+    def test_safety_validator_blocks_shared_line_conflict(self) -> None:
+        harness = BackendTestHarness()
+        harness.seed_device_state(device_state_payload())
+        harness.configure_zone("tray_1", line_id="line_a", shared_line_restricted=True)
+        harness.configure_zone("tray_2", device_id="esp32-2", line_id="line_a", shared_line_restricted=True)
+        harness.seed_device_state(device_state_payload(message_id="msg-state-zone2-line-0001", trace_id="trace-state-zone2-line-0001", device_id="esp32-2", zone_id="tray_2"))
+        harness.execute_manual_action(
+            {
+                "trace_id": "trace-line-active",
+                "command_id": "cmd-line-active",
+                "device_id": "esp32-2",
+                "zone_id": "tray_2",
+                "actuator": "irrigation_sequence",
+                "action": "START",
+                "duration_sec": 5,
+                "requested_at_ms": 10_000,
+            }
+        )
+
+        decision = harness.validator.validate(
+            harness.store,
+            ActionProposal(
+                trace_id="trace-line-check",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                actuator="irrigation_sequence",
+                action="START",
+                duration_sec=5,
+                origin=DecisionOrigin.OPERATOR,
+                reason="line check",
+                requested_at_ms=11_000,
+            ),
+        )
+
+        self.assertFalse(decision.allowed)
+        self.assertIn("shared_line_conflict:line_a:tray_2", decision.reasons)
+
+    def test_safety_validator_blocks_when_max_active_lines_reached(self) -> None:
+        harness = BackendTestHarness(max_active_lines=1)
+        harness.seed_device_state(device_state_payload())
+        harness.configure_zone("tray_1", line_id="line_a")
+        harness.configure_zone("tray_2", device_id="esp32-2", line_id="line_b")
+        harness.seed_device_state(device_state_payload(message_id="msg-state-zone2-active-lines-0001", trace_id="trace-state-zone2-active-lines-0001", device_id="esp32-2", zone_id="tray_2"))
+        harness.execute_manual_action(
+            {
+                "trace_id": "trace-lines-active",
+                "command_id": "cmd-lines-active",
+                "device_id": "esp32-2",
+                "zone_id": "tray_2",
+                "actuator": "irrigation_sequence",
+                "action": "START",
+                "duration_sec": 5,
+                "requested_at_ms": 10_000,
+            }
+        )
+
+        decision = harness.validator.validate(
+            harness.store,
+            ActionProposal(
+                trace_id="trace-lines-check",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                actuator="irrigation_sequence",
+                action="START",
+                duration_sec=5,
+                origin=DecisionOrigin.OPERATOR,
+                reason="line limit",
+                requested_at_ms=11_000,
+            ),
+        )
+
+        self.assertFalse(decision.allowed)
+        self.assertIn("max_active_lines_reached:2:1", decision.reasons)
+
+    def test_duration_is_clamped_to_zone_limit_in_command_record(self) -> None:
+        harness = BackendTestHarness()
+        harness.seed_device_state(device_state_payload())
+        harness.configure_zone("tray_1", max_open_duration_sec=4)
+        harness.validator._zone_configs["tray_1"] = replace(harness.validator._zone_configs["tray_1"], max_open_duration_sec=4)
+
+        decision = harness.validator.validate(
+            harness.store,
+            ActionProposal(
+                trace_id="trace-duration-clamp",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                actuator="irrigation_sequence",
+                action="START",
+                duration_sec=12,
+                origin=DecisionOrigin.OPERATOR,
+                reason="duration clamp",
+                requested_at_ms=10_000,
+            ),
+        )
+        record = harness.validator.build_command_record(
+            ActionProposal(
+                trace_id="trace-duration-clamp",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                actuator="irrigation_sequence",
+                action="START",
+                duration_sec=12,
+                origin=DecisionOrigin.OPERATOR,
+                reason="duration clamp",
+                requested_at_ms=10_000,
+            )
+        )
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.max_duration_ms, 4_000)
+        self.assertEqual(record.requested_payload["duration_sec"], 4)
+        self.assertEqual(record.metadata["duration_clamped_from_sec"], 12)
+
+    def test_manual_lock_and_emergency_stop_are_explicit_rejection_reasons(self) -> None:
+        harness = BackendTestHarness()
+        harness.seed_device_state(device_state_payload())
+        harness.store.set_automation_flag(
+            AutomationFlagRecord(
+                flag_name="maintenance_mode",
+                enabled=True,
+                updated_at_ms=10_000,
+                payload={},
+            )
+        )
+        harness.store.create_manual_lease(
+            ManualLeaseRecord(
+                lease_id="lease-manual-lock-0001",
+                zone_id="tray_1",
+                holder="operator-a",
+                created_at_ms=10_000,
+                expires_at_ms=30_000,
+                payload={},
+            )
+        )
+        harness.store.create_safety_lock(
+            SafetyLockRecord(
+                lock_id="lock-zone-manual-0001",
+                scope="zone",
+                scope_id="tray_1",
+                kind="manual_lock",
+                reason="operator lock",
+                created_at_ms=10_000,
+                owner="operator-a",
+                payload={},
+            )
+        )
+        harness.store._global_state["emergency_stop"] = True
+
+        decision = harness.validator.validate(
+            harness.store,
+            ActionProposal(
+                trace_id="trace-lock-check",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                actuator="irrigation_sequence",
+                action="START",
+                duration_sec=5,
+                origin=DecisionOrigin.OPERATOR,
+                reason="manual lock check",
+                requested_at_ms=11_000,
+                metadata={"operator_id": "operator-b"},
+            ),
+        )
+
+        self.assertFalse(decision.allowed)
+        self.assertIn("global_emergency_stop", decision.reasons)
+        self.assertIn("manual_lock_active:operator-a", decision.reasons)
+        self.assertIn("maintenance_mode_active", decision.reasons)
+
+    def test_faulted_contour_blocks_new_irrigation(self) -> None:
+        harness = BackendTestHarness()
+        harness.seed_device_state(device_state_payload())
+        harness.configure_zone("tray_1", pump_id="pump_main", line_id="line_a")
+        harness.store._executions["exec-faulted-open-0001"] = {
+            "execution_id": "exec-faulted-open-0001",
+            "command_id": "cmd-faulted-open-0001",
+            "device_id": "esp32-1",
+            "zone_id": "tray_1",
+            "lifecycle": "ABORTED",
+            "phase": "CLOSE_VALVE",
+            "active_step": "close_valve",
+            "updated_at_ms": 10_000,
+            "metadata": {},
+            "result_payload": {},
+        }
+        harness.configure_zone("tray_1", device_state={"valve_open": True})
+
+        decision = harness.validator.validate(
+            harness.store,
+            ActionProposal(
+                trace_id="trace-faulted-contour",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                actuator="master_pump",
+                action="ON",
+                duration_sec=5,
+                origin=DecisionOrigin.OPERATOR,
+                reason="faulted contour check",
+                requested_at_ms=11_000,
+            ),
+        )
+
+        self.assertFalse(decision.allowed)
+        self.assertTrue(any(reason.startswith("safe_stop_pending:") or reason.startswith("faulted_contour_open:") for reason in decision.reasons))
 
     def test_decision_engine_prefers_deterministic_policy_before_llama(self) -> None:
         harness = BackendTestHarness()

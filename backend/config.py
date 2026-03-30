@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 
 
@@ -8,6 +9,17 @@ def _csv(value: str, fallback: list[str]) -> list[str]:
     if not value.strip():
         return fallback
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _default_zone_device(zone_id: str) -> str | None:
+    match = re.search(r"(\d+)$", zone_id)
+    if not match:
+        return None
+    return f"esp32-{match.group(1)}"
+
+
+def _default_zone_line(zone_id: str) -> str:
+    return f"line_{zone_id}"
 
 
 @dataclass(frozen=True)
@@ -64,21 +76,30 @@ class OpenClawMcpConfig:
 @dataclass(frozen=True)
 class ZoneSafetyConfig:
     zone_id: str
+    device_id: str | None = None
+    pump_id: str = "pump_main"
+    line_id: str = ""
+    mutually_exclusive_zones: list[str] = field(default_factory=list)
+    shared_line_restricted: bool = False
     cooldown_sec: int = 300
     max_duration_per_run_sec: int = 30
+    max_open_duration_sec: int = 30
     max_runs_per_hour: int = 6
     max_total_water_per_day_ml: int = 3000
     settle_delay_ms: int = 1500
     flow_confirm_timeout_ms: int = 5000
     min_flow_ml_per_min: float = 50.0
     blocked: bool = False
+    maintenance_mode: bool = False
 
 
 @dataclass(frozen=True)
 class GlobalSafetyConfig:
     max_simultaneous_zones: int = 1
+    max_active_lines: int = 1
     emergency_stop: bool = False
     master_pump_timeout_sec: int = 60
+    pump_cooldown_sec: int = 0
     total_flow_limit_per_window_ml: int = 5000
     flow_window_sec: int = 3600
     leak_shutdown_enabled: bool = True
@@ -110,17 +131,26 @@ class BackendConfig:
         zone_configs: list[ZoneSafetyConfig] = []
         for zone_id in self.zone_ids:
             env_zone = zone_id.upper()
+            default_device_id = _default_zone_device(zone_id)
+            default_line_id = _default_zone_line(zone_id)
             zone_configs.append(
                 ZoneSafetyConfig(
                     zone_id=zone_id,
+                    device_id=os.getenv(f"ZONE_{env_zone}_DEVICE_ID", default_device_id or "").strip() or default_device_id,
+                    pump_id=os.getenv(f"ZONE_{env_zone}_PUMP_ID", "pump_main").strip() or "pump_main",
+                    line_id=os.getenv(f"ZONE_{env_zone}_LINE_ID", default_line_id).strip() or default_line_id,
+                    mutually_exclusive_zones=_csv(os.getenv(f"ZONE_{env_zone}_MUTUALLY_EXCLUSIVE_ZONES", ""), []),
+                    shared_line_restricted=os.getenv(f"ZONE_{env_zone}_SHARED_LINE_RESTRICTED", "0").strip().lower() in {"1", "true", "yes", "on"},
                     cooldown_sec=int(os.getenv(f"ZONE_{env_zone}_COOLDOWN_SEC", "300")),
                     max_duration_per_run_sec=int(os.getenv(f"ZONE_{env_zone}_MAX_DURATION_SEC", "30")),
+                    max_open_duration_sec=int(os.getenv(f"ZONE_{env_zone}_MAX_OPEN_DURATION_SEC", os.getenv(f"ZONE_{env_zone}_MAX_DURATION_SEC", "30"))),
                     max_runs_per_hour=int(os.getenv(f"ZONE_{env_zone}_MAX_RUNS_PER_HOUR", "6")),
                     max_total_water_per_day_ml=int(os.getenv(f"ZONE_{env_zone}_MAX_WATER_ML", "3000")),
                     settle_delay_ms=int(os.getenv(f"ZONE_{env_zone}_SETTLE_DELAY_MS", "1500")),
                     flow_confirm_timeout_ms=int(os.getenv(f"ZONE_{env_zone}_FLOW_CONFIRM_TIMEOUT_MS", "5000")),
                     min_flow_ml_per_min=float(os.getenv(f"ZONE_{env_zone}_MIN_FLOW_ML_PER_MIN", "50")),
                     blocked=os.getenv(f"ZONE_{env_zone}_BLOCKED", "0").strip().lower() in {"1", "true", "yes", "on"},
+                    maintenance_mode=os.getenv(f"ZONE_{env_zone}_MAINTENANCE_MODE", "0").strip().lower() in {"1", "true", "yes", "on"},
                 )
             )
         return zone_configs
@@ -169,8 +199,10 @@ def load_backend_config() -> BackendConfig:
         ),
         global_safety=GlobalSafetyConfig(
             max_simultaneous_zones=int(os.getenv("GLOBAL_MAX_SIMULTANEOUS_ZONES", "1")),
+            max_active_lines=int(os.getenv("GLOBAL_MAX_ACTIVE_LINES", os.getenv("GLOBAL_MAX_SIMULTANEOUS_ZONES", "1"))),
             emergency_stop=os.getenv("GLOBAL_EMERGENCY_STOP", "0").strip().lower() in {"1", "true", "yes", "on"},
             master_pump_timeout_sec=int(os.getenv("MASTER_PUMP_TIMEOUT_SEC", "60")),
+            pump_cooldown_sec=int(os.getenv("PUMP_COOLDOWN_SEC", "0")),
             total_flow_limit_per_window_ml=int(os.getenv("TOTAL_FLOW_LIMIT_PER_WINDOW_ML", "5000")),
             flow_window_sec=int(os.getenv("FLOW_WINDOW_SEC", "3600")),
             leak_shutdown_enabled=os.getenv("LEAK_SHUTDOWN_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"},
