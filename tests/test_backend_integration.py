@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import unittest
 from unittest import mock
 
 from backend.domain.models import ExecutionState
+from mqtt.topics import telemetry_topic
 from shared.contracts.messages import CommandLifecycle
 from tests.fixtures import ack_payload, device_state_payload, result_payload, telemetry_payload
 from tests.harness import BackendTestHarness
@@ -43,6 +45,119 @@ class BackendIntegrationTests(unittest.TestCase):
         self.assertEqual(len(harness.mqtt.published), 1)
         incidents = [entry for entry in harness.store._audit_logs if entry["action_type"] == "INCIDENT"]
         self.assertTrue(any(entry["message"] == "replay_suspected" for entry in incidents))
+
+    def test_old_timestamp_telemetry_goes_to_history_only_and_does_not_rollback_current_state(self) -> None:
+        harness = BackendTestHarness(allowed_clock_skew_sec=1, stale_message_policy="history_only")
+        harness.seed_device_state(device_state_payload())
+
+        harness.ingest_telemetry(
+            telemetry_payload(
+                message_id="msg-current-telemetry-0001",
+                trace_id="trace-current-telemetry-0001",
+                ts_ms=10_000,
+                message_counter=10,
+                sensors={"soil_moisture": 25.0, "temperature": 23.0, "tank_level": 85.0},
+            )
+        )
+        published_after_current = len(harness.mqtt.published)
+        harness.ingest_telemetry(
+            telemetry_payload(
+                message_id="msg-old-telemetry-0001",
+                trace_id="trace-old-telemetry-0001",
+                ts_ms=5_000,
+                message_counter=11,
+                sensors={"soil_moisture": 9.0, "temperature": 19.0, "tank_level": 70.0},
+            )
+        )
+
+        zone = harness.store.get_zone_state("tray_1")
+        history = harness.telemetry_history.get_sensor_history("esp32-1", "soil_moisture", 0, 20_000)
+        self.assertEqual(zone["telemetry"]["soil_moisture"], 25.0)
+        self.assertEqual(len(harness.mqtt.published), published_after_current)
+        self.assertTrue(any(item["message_id"] == "msg-old-telemetry-0001" for item in history))
+        self.assertTrue(any(entry["message"] == "out_of_order" for entry in harness.store._audit_logs))
+
+    def test_lower_message_counter_outside_reorder_window_is_stale(self) -> None:
+        harness = BackendTestHarness(allowed_counter_reorder_window=2, stale_message_policy="history_only")
+        harness.seed_device_state(device_state_payload())
+
+        harness.ingest_telemetry(
+            telemetry_payload(
+                message_id="msg-counter-current-0001",
+                trace_id="trace-counter-current-0001",
+                ts_ms=10_000,
+                message_counter=10,
+                sensors={"soil_moisture": 25.0, "temperature": 23.0, "tank_level": 85.0},
+            )
+        )
+        published_after_current = len(harness.mqtt.published)
+        harness.ingest_telemetry(
+            telemetry_payload(
+                message_id="msg-counter-stale-0001",
+                trace_id="trace-counter-stale-0001",
+                ts_ms=10_100,
+                message_counter=6,
+                sensors={"soil_moisture": 8.0, "temperature": 18.0, "tank_level": 60.0},
+            )
+        )
+
+        zone = harness.store.get_zone_state("tray_1")
+        self.assertEqual(zone["telemetry"]["soil_moisture"], 25.0)
+        self.assertEqual(len(harness.mqtt.published), published_after_current)
+        self.assertTrue(any(entry["payload"].get("reason") == "stale_message_counter" for entry in harness.store._audit_logs if entry["action_type"] == "INCIDENT"))
+
+    def test_slightly_out_of_order_counter_within_window_keeps_history_without_decision_trigger(self) -> None:
+        harness = BackendTestHarness(allowed_counter_reorder_window=3, stale_message_policy="history_only")
+        harness.seed_device_state(device_state_payload())
+
+        harness.ingest_telemetry(
+            telemetry_payload(
+                message_id="msg-counter-base-0001",
+                trace_id="trace-counter-base-0001",
+                ts_ms=10_000,
+                message_counter=10,
+                sensors={"soil_moisture": 25.0, "temperature": 23.0, "tank_level": 85.0},
+            )
+        )
+        published_after_base = len(harness.mqtt.published)
+        harness.ingest_telemetry(
+            telemetry_payload(
+                message_id="msg-counter-reorder-0001",
+                trace_id="trace-counter-reorder-0001",
+                ts_ms=9_900,
+                message_counter=9,
+                sensors={"soil_moisture": 7.0, "temperature": 20.0, "tank_level": 80.0},
+            )
+        )
+
+        zone = harness.store.get_zone_state("tray_1")
+        history = harness.telemetry_history.get_sensor_history("esp32-1", "soil_moisture", 0, 20_000)
+        self.assertEqual(zone["telemetry"]["soil_moisture"], 25.0)
+        self.assertEqual(len(harness.mqtt.published), published_after_base)
+        self.assertTrue(any(item["message_id"] == "msg-counter-reorder-0001" for item in history))
+        self.assertTrue(any(entry["payload"].get("reason") == "out_of_order_counter" for entry in harness.store._audit_logs if entry["action_type"] == "INCIDENT"))
+
+    def test_invalid_telemetry_payload_missing_required_fields_is_rejected(self) -> None:
+        harness = BackendTestHarness()
+        harness.seed_device_state(device_state_payload())
+
+        harness.ingestion.ingest(
+            telemetry_topic("esp32-1"),
+            json.dumps(
+                {
+                    "message_id": "msg-invalid-telemetry-0001",
+                    "trace_id": "trace-invalid-telemetry-0001",
+                    "device_id": "esp32-1",
+                    "zone_id": "tray_1",
+                    "ts_ms": 10_000,
+                    "message_counter": 1,
+                }
+            ).encode("utf-8"),
+        )
+
+        self.assertEqual(len(harness.telemetry_history._history), 0)
+        self.assertEqual(len(harness.mqtt.published), 0)
+        self.assertTrue(any(entry["message"] == "validation_fail" for entry in harness.store._audit_logs if entry["action_type"] == "INCIDENT"))
 
     def test_stale_command_expires_when_no_ack_or_result_arrives(self) -> None:
         harness = BackendTestHarness(command_ttl_sec=1)

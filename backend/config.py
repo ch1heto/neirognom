@@ -74,6 +74,13 @@ class OpenClawMcpConfig:
 
 
 @dataclass(frozen=True)
+class IngestionPolicyConfig:
+    allowed_clock_skew_sec: int = 30
+    allowed_counter_reorder_window: int = 3
+    stale_message_policy: str = "history_only"
+
+
+@dataclass(frozen=True)
 class ZoneSafetyConfig:
     zone_id: str
     device_id: str | None = None
@@ -122,6 +129,7 @@ class BackendConfig:
     llama: LlamaConfig
     operator_ui: OperatorUiConfig
     openclaw_mcp: OpenClawMcpConfig
+    ingestion: IngestionPolicyConfig
     global_safety: GlobalSafetyConfig
     state_store_backend: str = "sqlite"
     telemetry_history_backend: str = "influx"
@@ -196,6 +204,11 @@ def load_backend_config() -> BackendConfig:
             server_version=os.getenv("OPENCLAW_MCP_SERVER_VERSION", "1.0.0").strip() or "1.0.0",
             action_auth_token=os.getenv("OPENCLAW_MCP_ACTION_TOKEN", "").strip(),
             require_action_token=os.getenv("OPENCLAW_MCP_REQUIRE_ACTION_TOKEN", "1").strip().lower() in {"1", "true", "yes", "on"},
+        ),
+        ingestion=IngestionPolicyConfig(
+            allowed_clock_skew_sec=int(os.getenv("INGESTION_ALLOWED_CLOCK_SKEW_SEC", "30")),
+            allowed_counter_reorder_window=int(os.getenv("INGESTION_ALLOWED_COUNTER_REORDER_WINDOW", "3")),
+            stale_message_policy=(os.getenv("INGESTION_STALE_MESSAGE_POLICY", "history_only").strip().lower() or "history_only"),
         ),
         global_safety=GlobalSafetyConfig(
             max_simultaneous_zones=int(os.getenv("GLOBAL_MAX_SIMULTANEOUS_ZONES", "1")),

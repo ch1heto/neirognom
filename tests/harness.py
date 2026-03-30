@@ -7,7 +7,7 @@ from typing import Any
 import paho.mqtt.client as mqtt
 
 from backend.api.tools import BackendToolService
-from backend.config import load_backend_config
+from backend.config import IngestionPolicyConfig, load_backend_config
 from backend.decision_engine.engine import DecisionEngine
 from backend.dispatcher.service import CommandDispatcher
 from backend.ingestion.service import IngestionService
@@ -59,11 +59,15 @@ class BackendTestHarness:
         max_simultaneous_zones: int | None = None,
         max_active_lines: int | None = None,
         pump_cooldown_sec: int | None = None,
+        allowed_clock_skew_sec: int | None = None,
+        allowed_counter_reorder_window: int | None = None,
+        stale_message_policy: str | None = None,
         mcp_action_token: str = "test-mcp-token",
     ) -> None:
         config = load_backend_config()
         global_safety = config.global_safety
         openclaw_mcp = config.openclaw_mcp
+        ingestion_policy = config.ingestion
         if command_ttl_sec is not None:
             global_safety = replace(global_safety, command_ttl_sec=command_ttl_sec)
         if max_simultaneous_zones is not None:
@@ -72,8 +76,14 @@ class BackendTestHarness:
             global_safety = replace(global_safety, max_active_lines=max_active_lines)
         if pump_cooldown_sec is not None:
             global_safety = replace(global_safety, pump_cooldown_sec=pump_cooldown_sec)
+        if allowed_clock_skew_sec is not None:
+            ingestion_policy = replace(ingestion_policy, allowed_clock_skew_sec=allowed_clock_skew_sec)
+        if allowed_counter_reorder_window is not None:
+            ingestion_policy = replace(ingestion_policy, allowed_counter_reorder_window=allowed_counter_reorder_window)
+        if stale_message_policy is not None:
+            ingestion_policy = replace(ingestion_policy, stale_message_policy=stale_message_policy)
         openclaw_mcp = replace(openclaw_mcp, action_auth_token=mcp_action_token, require_action_token=True)
-        self.config = replace(config, global_safety=global_safety, openclaw_mcp=openclaw_mcp)
+        self.config = replace(config, global_safety=global_safety, openclaw_mcp=openclaw_mcp, ingestion=ingestion_policy)
 
         self.store = MemoryStateStore()
         self.store.initialize(self.config.zone_configs(), self.config.global_safety)
@@ -84,7 +94,7 @@ class BackendTestHarness:
         self.llama = StubLlamaClient()
         self.decision_engine = DecisionEngine(self.config, self.store, self.telemetry_history, self.llama)
         self.dispatcher = CommandDispatcher(self.mqtt, self.config, self.store, self.validator)
-        self.ingestion = IngestionService(self.store, self.telemetry_history, self.decision_engine, self.dispatcher, self.security_monitor)
+        self.ingestion = IngestionService(self.store, self.telemetry_history, self.decision_engine, self.dispatcher, self.security_monitor, self.config.ingestion)
         self.tools = BackendToolService(self.store, self.telemetry_history, self.dispatcher)
         self.operator = OperatorControlService(self.config, self.store, self.telemetry_history, self.tools)
         self.mcp_adapter = OpenClawMcpAdapter(self.operator, self.config.openclaw_mcp)

@@ -155,6 +155,8 @@ class MemoryStateStore:
                 "zone_id": message.zone_id,
                 "last_seen_ms": message.ts_ms,
                 "last_telemetry_ms": message.ts_ms,
+                "last_telemetry_counter": message.message_counter,
+                "last_telemetry_message_id": message.message_id,
                 "telemetry": dict(message.sensors),
             }
         )

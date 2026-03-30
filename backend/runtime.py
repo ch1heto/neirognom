@@ -46,7 +46,7 @@ class BackendRuntime:
         self.llama = LlamaDecisionClient(self.config.llama)
         self.decision_engine = DecisionEngine(self.config, self.state_store, self.telemetry_history, self.llama)
         self.dispatcher = CommandDispatcher(self.mqtt, self.config, self.state_store, self.safety)
-        self.ingestion = IngestionService(self.state_store, self.telemetry_history, self.decision_engine, self.dispatcher, self.security_monitor)
+        self.ingestion = IngestionService(self.state_store, self.telemetry_history, self.decision_engine, self.dispatcher, self.security_monitor, self.config.ingestion)
         self.backend_tools = BackendToolService(self.state_store, self.telemetry_history, self.dispatcher)
         self.operator_service = OperatorControlService(self.config, self.state_store, self.telemetry_history, self.backend_tools)
         self.openclaw_adapter = OpenClawMcpAdapter(self.operator_service, self.config.openclaw_mcp)

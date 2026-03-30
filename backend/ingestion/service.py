@@ -4,9 +4,11 @@ import json
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 
 from pydantic import ValidationError
 
+from backend.config import IngestionPolicyConfig
 from backend.decision_engine.engine import DecisionEngine
 from backend.dispatcher.service import CommandDispatcher
 from backend.security.monitor import SecurityMonitor
@@ -19,13 +21,31 @@ from shared.contracts.messages import CommandAck, CommandResult, DeviceStateMess
 log = logging.getLogger("backend.ingestion")
 
 
+@dataclass(frozen=True)
+class TelemetryDisposition:
+    kind: str
+    reason: str | None = None
+    write_history: bool = True
+    update_current_state: bool = True
+    trigger_decision: bool = True
+
+
 class IngestionService:
-    def __init__(self, state_store: StateStore, telemetry_history: TelemetryHistoryStore, decision_engine: DecisionEngine, dispatcher: CommandDispatcher, security_monitor: SecurityMonitor) -> None:
+    def __init__(
+        self,
+        state_store: StateStore,
+        telemetry_history: TelemetryHistoryStore,
+        decision_engine: DecisionEngine,
+        dispatcher: CommandDispatcher,
+        security_monitor: SecurityMonitor,
+        ingestion_policy: IngestionPolicyConfig | None = None,
+    ) -> None:
         self._state_store = state_store
         self._telemetry_history = telemetry_history
         self._decision_engine = decision_engine
         self._dispatcher = dispatcher
         self._security_monitor = security_monitor
+        self._policy = ingestion_policy or IngestionPolicyConfig()
 
     def ingest(self, topic: str, payload_bytes: bytes) -> None:
         parsed = parse_topic(topic)
@@ -52,14 +72,8 @@ class IngestionService:
                 if self._state_store.seen_message(message.message_id):
                     self._state_store.note_incident("replay_suspected", {"topic": topic, "message_id": message.message_id, "device_id": message.device_id, "zone_id": message.zone_id, "trace_id": message.trace_id})
                     return
-                self._state_store.write_telemetry_snapshot(message)
-                self._telemetry_history.write_telemetry(message)
-                self._security_monitor.process_telemetry(message)
-                self._dispatcher.observe_telemetry(message)
-                proposal = self._decision_engine.evaluate_telemetry(message)
-                if proposal is not None:
-                    self._dispatcher.dispatch_proposal(proposal)
-                log.info("ingest receive telemetry device_id=%s zone_id=%s trace_id=%s", message.device_id, message.zone_id, message.trace_id)
+                disposition = self._classify_telemetry(message)
+                self._handle_telemetry(topic, message, disposition)
                 return
 
             if parsed.channel == STATE_SUFFIX:
@@ -137,3 +151,79 @@ class IngestionService:
             return
 
         log.warning("ingest receive unhandled_channel=%s topic=%s", parsed.channel, topic)
+
+    def _classify_telemetry(self, message: TelemetryMessage) -> TelemetryDisposition:
+        skew_ms = max(0, self._policy.allowed_clock_skew_sec) * 1000
+        current_device = self._state_store.get_device_state(message.device_id)
+        current_ts = int(current_device.get("last_telemetry_ms") or 0)
+        current_counter = current_device.get("last_telemetry_counter")
+
+        if current_ts and message.ts_ms + skew_ms < current_ts:
+            return TelemetryDisposition(
+                kind="out_of_order",
+                reason="out_of_order_timestamp",
+                write_history=self._should_keep_stale_history(),
+                update_current_state=False,
+                trigger_decision=False,
+            )
+        if current_counter is not None and message.message_counter + max(0, self._policy.allowed_counter_reorder_window) < int(current_counter):
+            return self._stale_disposition("stale_message_counter")
+        if current_counter is not None and message.message_counter < int(current_counter):
+            return TelemetryDisposition(
+                kind="out_of_order",
+                reason="out_of_order_counter",
+                write_history=self._should_keep_stale_history(),
+                update_current_state=False,
+                trigger_decision=False,
+            )
+        return TelemetryDisposition(kind="current")
+
+    def _stale_disposition(self, reason: str) -> TelemetryDisposition:
+        keep_history = self._should_keep_stale_history()
+        return TelemetryDisposition(
+            kind="stale",
+            reason=reason,
+            write_history=keep_history,
+            update_current_state=False,
+            trigger_decision=False,
+        )
+
+    def _should_keep_stale_history(self) -> bool:
+        return self._policy.stale_message_policy == "history_only"
+
+    def _handle_telemetry(self, topic: str, message: TelemetryMessage, disposition: TelemetryDisposition) -> None:
+        if disposition.write_history:
+            self._telemetry_history.write_telemetry(message)
+        if disposition.kind != "current":
+            self._state_store.note_incident(
+                disposition.kind,
+                {
+                    "topic": topic,
+                    "message_id": message.message_id,
+                    "device_id": message.device_id,
+                    "zone_id": message.zone_id,
+                    "trace_id": message.trace_id,
+                    "timestamp": message.ts_ms,
+                    "message_counter": message.message_counter,
+                    "reason": disposition.reason,
+                    "history_written": disposition.write_history,
+                },
+            )
+            log.warning(
+                "telemetry %s device_id=%s zone_id=%s trace_id=%s reason=%s history_written=%s",
+                disposition.kind,
+                message.device_id,
+                message.zone_id,
+                message.trace_id,
+                disposition.reason,
+                disposition.write_history,
+            )
+            return
+
+        self._state_store.write_telemetry_snapshot(message)
+        self._security_monitor.process_telemetry(message)
+        self._dispatcher.observe_telemetry(message)
+        proposal = self._decision_engine.evaluate_telemetry(message)
+        if proposal is not None:
+            self._dispatcher.dispatch_proposal(proposal)
+        log.info("ingest receive telemetry device_id=%s zone_id=%s trace_id=%s", message.device_id, message.zone_id, message.trace_id)
