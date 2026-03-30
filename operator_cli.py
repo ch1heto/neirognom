@@ -1,8 +1,16 @@
+"""Deprecated legacy operator CLI.
+
+This script is kept only for read-only inspection of legacy bridge tables.
+Direct reset/publish operations bypass the current backend safety/API path and
+are therefore disabled by default.
+"""
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import warnings
 from datetime import datetime, timezone
 
 import paho.mqtt.publish as mqtt_publish
@@ -16,6 +24,7 @@ load_dotenv()
 DEFAULT_HOST = os.getenv("MQTT_HOST", "localhost")
 DEFAULT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 DEFAULT_TRAY = os.getenv("TRAY_ID", "tray01")
+LEGACY_OPERATOR_RESET_ENABLE = os.getenv("LEGACY_OPERATOR_RESET_ENABLE", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _fmt_ts(ts: int | None) -> str:
@@ -59,6 +68,12 @@ def _print_events(limit: int) -> int:
 
 
 def _publish_reset(metric: str, operator: str, host: str, port: int, tray: str) -> int:
+    if not LEGACY_OPERATOR_RESET_ENABLE:
+        raise RuntimeError(
+            "operator_cli reset is disabled by default because it bypasses the backend-centric "
+            "manual action path. Use the operator web UI or backend API instead. "
+            "Set LEGACY_OPERATOR_RESET_ENABLE=1 only for temporary legacy recovery."
+        )
     topic = f"farm/{tray}/operator/reset"
     payload = json.dumps({"metric": metric, "operator": operator}, ensure_ascii=False)
     mqtt_publish.single(topic, payload=payload, hostname=host, port=port)
@@ -67,7 +82,7 @@ def _publish_reset(metric: str, operator: str, host: str, port: int, tray: str) 
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Operator inspection/reset helper for the hybrid control bridge")
+    parser = argparse.ArgumentParser(description="Deprecated legacy inspection helper. Use backend operator UI/API for control actions.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="Show current escalation state derived from control events")
@@ -75,7 +90,7 @@ def _build_parser() -> argparse.ArgumentParser:
     events = sub.add_parser("events", help="Show recent control_events rows")
     events.add_argument("--limit", type=int, default=20, help="Number of recent events to show")
 
-    reset = sub.add_parser("reset", help="Publish an operator reset request over MQTT")
+    reset = sub.add_parser("reset", help="Deprecated legacy MQTT reset path; disabled unless LEGACY_OPERATOR_RESET_ENABLE=1")
     reset.add_argument("metric", choices=["ph", "ec", "all"], help="Metric to reset")
     reset.add_argument("--operator", default="operator_cli", help="Operator name to include in the reset event")
     reset.add_argument("--host", default=DEFAULT_HOST, help="MQTT host")
@@ -86,6 +101,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    warnings.warn(
+        "operator_cli.py is deprecated. Use the backend operator UI/API for manual control actions.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     db.init_db()
     parser = _build_parser()
     args = parser.parse_args()

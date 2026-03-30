@@ -1,9 +1,15 @@
-"""Deprecated legacy command gateway. New runtime path is backend.dispatcher.service."""
+"""Deprecated legacy command gateway compatibility module.
+
+The active runtime path is backend.ingestion -> backend.decision_engine ->
+backend.safety -> backend.dispatcher. This file is retained only for legacy
+bridge tooling and historical diagnostics.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
+import warnings
 import threading
 import time
 import uuid
@@ -76,6 +82,11 @@ class HybridCommandGateway:
         thresholds: dict[str, Any],
         ack_timeout_sec: int,
     ) -> None:
+        warnings.warn(
+            "HybridCommandGateway is deprecated. Use the backend-centric dispatcher and operator/API layers instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._client = mqtt_client
         self._safety = safety
         self._dry_run = dry_run

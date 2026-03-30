@@ -1,3 +1,5 @@
+"""Canonical backend-centric entrypoint for the greenhouse control runtime."""
+
 from __future__ import annotations
 
 from backend.runtime import BackendRuntime

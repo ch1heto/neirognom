@@ -1,3 +1,9 @@
+"""Canonical backend safety validator for all actuator decisions.
+
+AI, web UI, MCP, and any other operator surface must converge on this layer
+before actuator commands reach the dispatcher.
+"""
+
 from __future__ import annotations
 
 import time

@@ -1,3 +1,9 @@
+"""Legacy bridge audit/event SQLite store.
+
+This module is retained for historical diagnostics and compatibility helpers.
+The active backend-centric control state lives in backend/state/store.py.
+"""
+
 import logging
 import sqlite3
 import threading

@@ -2,6 +2,11 @@
 
 This repository now targets a backend-centric greenhouse runtime with a strict execution safety boundary.
 
+Architecture notes:
+
+- Runtime layers: [architecture_layers.md](/V:/work/DIPLOM/testMoskitto/docs/architecture_layers.md)
+- Legacy compatibility map: [legacy_compatibility.md](/V:/work/DIPLOM/testMoskitto/docs/legacy_compatibility.md)
+
 ## Runtime path
 
 - `ESP32` stays edge-only: sensors, actuators, watchdogs, safe mode.
@@ -135,6 +140,20 @@ It is not used for command state, safety locks, leases, alarms, or execution rec
 - Backend rejects unknown, mismatched, replay-suspected, and malformed ACK/RESULT messages.
 - Broker disconnects, auth failures, stale heartbeats, empty tank, leak suspicion, and critical anomalies create persistent SQLite locks/alarms.
 - Dangerous actions are audit logged.
+
+## Legacy Isolation
+
+Legacy bridge-era modules are intentionally left in place only where full removal would be risky. They are deprecated compatibility artifacts, not active runtime layers:
+
+- `smart_bridge.py`
+- `command_gateway.py`
+- `control_runtime.py`
+- `dashboard_server.py`
+- `operator_cli.py`
+- `openclaw_client.py`
+- `database.py`
+
+See [legacy_compatibility.md](/V:/work/DIPLOM/testMoskitto/docs/legacy_compatibility.md) for replacement mappings.
 
 ## Security model
 

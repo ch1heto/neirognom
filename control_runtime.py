@@ -1,9 +1,15 @@
-"""Deprecated legacy control runtime. New runtime path is backend.decision_engine + backend.safety."""
+"""Deprecated legacy control runtime compatibility layer.
+
+The active runtime path is backend.decision_engine + backend.safety +
+backend.execution. This module remains only for legacy bridge diagnostics and
+older event-store tooling.
+"""
 
 from __future__ import annotations
 
 import logging
 import time
+import warnings
 from collections import deque
 from dataclasses import dataclass
 from typing import Any
@@ -49,6 +55,11 @@ class ControlSafetyManager:
     CONTROL_METRICS = ("ph", "ec")
 
     def __init__(self, config: KnowledgeBaseConfig, profile: RuntimeProfile) -> None:
+        warnings.warn(
+            "ControlSafetyManager is deprecated. Use backend safety/decision services for the active runtime path.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._config = config
         self._profile = profile
         self._rules = config.safety_rules_for_profile(profile)

@@ -1,3 +1,11 @@
+"""Canonical runtime DTOs for the backend-centric greenhouse architecture.
+
+These models are the source of truth for telemetry, device state, command
+messages, ACK/RESULT events, and Llama request/response contracts.
+Legacy bridge/OpenClaw compatibility modules must not define competing runtime
+message formats for the active backend path.
+"""
+
 from __future__ import annotations
 
 from enum import StrEnum

@@ -1,3 +1,9 @@
+"""Deprecated legacy dashboard for historical bridge/OpenClaw diagnostics only.
+
+It is not the operational operator UI and must not be treated as the active
+control surface for the backend-centric runtime.
+"""
+
 from __future__ import annotations
 
 import io
@@ -5,6 +11,7 @@ import json
 import logging
 import os
 import zipfile
+import warnings
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -334,6 +341,11 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
 
 def main() -> int:
+    warnings.warn(
+        "dashboard_server.py is deprecated. Use backend_server.py and operator_ui.html for the active backend-centric surfaces.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     db.init_db()
     os.chdir(ROOT)
     server = ThreadingHTTPServer((HOST, PORT), DashboardHandler)

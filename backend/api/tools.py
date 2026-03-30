@@ -1,3 +1,10 @@
+"""Shared backend tool facade used by operator-facing adapters only.
+
+This module is intentionally narrow: web UI and MCP layers call into these
+helpers, and all actuation still flows through the dispatcher and safety
+validator. Frontends must not publish MQTT directly or mutate state stores.
+"""
+
 from __future__ import annotations
 
 import time
