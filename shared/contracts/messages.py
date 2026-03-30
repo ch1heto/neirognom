@@ -492,8 +492,8 @@ class LlmDecisionResponse(StrictModel):
     decision: Literal["no_action", "open_valve", "close_valve", "dose_solution"]
     zone_id: str = Field(min_length=1, max_length=64)
     requested_duration_sec: int | None = Field(default=None, ge=0, le=3600)
-    dose_ml: int | None = Field(default=None, ge=0, le=10_000)
-    rationale: str = Field(min_length=1, max_length=512)
+    dose_ml: int | None = Field(default=None, ge=0)
+    rationale: str = ""
     confidence: float = Field(ge=0.0, le=1.0)
 
 
