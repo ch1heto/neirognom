@@ -62,18 +62,6 @@ class FakeEsp32Simulator:
         self.mode = MODES[mode]
         self.max_valve_open_sec = max(1, valve_limit_sec)
         self.max_pump_run_sec = max(1, pump_limit_sec)
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"sim-{device_id}")
-        if broker_username:
-            self.client.username_pw_set(broker_username, broker_password)
-        self.client.on_connect = self._on_connect
-        self.client.on_disconnect = self._on_disconnect
-        self.client.on_message = self._on_message
-        self.client.will_set(
-            presence_topic(self.device_id),
-            payload=json.dumps(self._presence_payload(DeviceConnectivity.OFFLINE, reason="mqtt_disconnect", lwt=True)),
-            qos=1,
-            retain=True,
-        )
         self._broker_host = broker_host
         self._broker_port = broker_port
         self._counter = 0
@@ -91,6 +79,19 @@ class FakeEsp32Simulator:
         self._temperature = self.mode.temperature
         self._humidity = self.mode.humidity
         self._pressure_kpa = self.mode.pressure_kpa
+
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"sim-{device_id}")
+        if broker_username:
+            self.client.username_pw_set(broker_username, broker_password)
+        self.client.on_connect = self._on_connect
+        self.client.on_disconnect = self._on_disconnect
+        self.client.on_message = self._on_message
+        self.client.will_set(
+            presence_topic(self.device_id),
+            payload=json.dumps(self._presence_payload(DeviceConnectivity.OFFLINE, reason="mqtt_disconnect", lwt=True)),
+            qos=1,
+            retain=True,
+        )
 
     def run(self) -> None:
         print(
