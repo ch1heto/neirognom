@@ -38,6 +38,10 @@ This repository now targets a backend-centric greenhouse runtime with a strict e
   - MQTT ingestion, validation, dedup, normalization
 - `backend/api/tools.py`
   - operator/OpenClaw tool layer
+- `backend/operator/service.py`
+  - operator-facing safe control service
+- `backend/operator/web.py`
+  - runtime-hosted HTTP server for the operator UI
 - `integrations/llama/client.py`
   - local Llama API adapter
 - `integrations/openclaw_mcp/tools.py`
@@ -162,6 +166,10 @@ Key variables:
 .\venv\Scripts\python.exe .\backend_server.py
 ```
 
+If `OPERATOR_UI_ENABLED=1`, the backend also hosts the operator UI at `http://127.0.0.1:8780` by default.
+
+Operator UI notes: [operator_ui.md](/V:/work/DIPLOM/testMoskitto/docs/operator_ui.md)
+
 ## Testing
 
 Layered backend tests live under `tests/`:
@@ -171,6 +179,7 @@ Layered backend tests live under `tests/`:
 - `test_backend_ai_flow.py`
 - `test_backend_operator_flow.py`
 - `test_backend_architecture.py`
+- `test_operator_ui_service.py`
 
 Reusable test fixtures and the in-memory backend harness live in `tests/fixtures.py` and `tests/harness.py`.
 

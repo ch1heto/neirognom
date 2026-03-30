@@ -11,6 +11,7 @@ from backend.config import load_backend_config
 from backend.decision_engine.engine import DecisionEngine
 from backend.dispatcher.service import CommandDispatcher
 from backend.ingestion.service import IngestionService
+from backend.operator.service import OperatorControlService
 from backend.security.monitor import SecurityMonitor
 from backend.safety.validator import SafetyValidator
 from backend.state.influx import MemoryTelemetryHistoryStore
@@ -69,6 +70,7 @@ class BackendTestHarness:
         self.dispatcher = CommandDispatcher(self.mqtt, self.config, self.store, self.validator)
         self.ingestion = IngestionService(self.store, self.telemetry_history, self.decision_engine, self.dispatcher, self.security_monitor)
         self.tools = BackendToolService(self.store, self.telemetry_history, self.dispatcher)
+        self.operator = OperatorControlService(self.config, self.store, self.telemetry_history, self.tools)
 
     def seed_device_state(self, payload: dict[str, Any]) -> None:
         self.ingest_state(payload)

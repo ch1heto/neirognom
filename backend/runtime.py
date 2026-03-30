@@ -12,6 +12,8 @@ from backend.decision_engine.engine import DecisionEngine
 from backend.dispatcher.service import CommandDispatcher
 from backend.ingestion.service import IngestionService
 from backend.logging_utils import configure_logging
+from backend.operator.service import OperatorControlService
+from backend.operator.web import OperatorUiServer
 from backend.security.monitor import SecurityMonitor
 from backend.safety.validator import SafetyValidator
 from backend.state.influx import build_telemetry_history_store
@@ -44,7 +46,13 @@ class BackendRuntime:
         self.dispatcher = CommandDispatcher(self.mqtt, self.config, self.state_store, self.safety)
         self.ingestion = IngestionService(self.state_store, self.telemetry_history, self.decision_engine, self.dispatcher, self.security_monitor)
         self.backend_tools = BackendToolService(self.state_store, self.telemetry_history, self.dispatcher)
+        self.operator_service = OperatorControlService(self.config, self.state_store, self.telemetry_history, self.backend_tools)
         self.openclaw_adapter = OpenClawMcpAdapter(self.backend_tools)
+        self.operator_ui = (
+            OperatorUiServer(self.config.operator_ui.host, self.config.operator_ui.port, self.operator_service)
+            if self.config.operator_ui.enabled
+            else None
+        )
 
         self.mqtt.on_connect = self._on_connect
         self.mqtt.on_message = self._on_message
@@ -82,15 +90,18 @@ class BackendRuntime:
 
     def run(self) -> None:
         log.info(
-            "backend startup mqtt=%s:%d sqlite=%s influx_enabled=%s llama=%s openclaw_operator_enabled=%s zones=%s",
+            "backend startup mqtt=%s:%d sqlite=%s influx_enabled=%s llama=%s openclaw_operator_enabled=%s operator_ui=%s zones=%s",
             self.config.mqtt.host,
             self.config.mqtt.port,
             self.config.sqlite.path,
             self.config.influx.enabled,
             self.config.llama.api_url,
             self.config.openclaw.enabled,
+            self.operator_ui.url if self.operator_ui else "disabled",
             ",".join(self.config.zone_ids),
         )
+        if self.operator_ui is not None:
+            self.operator_ui.start()
         self.mqtt.connect(self.config.mqtt.host, self.config.mqtt.port, keepalive=60)
         self.mqtt.loop_start()
         try:
@@ -103,3 +114,5 @@ class BackendRuntime:
         finally:
             self.mqtt.loop_stop()
             self.mqtt.disconnect()
+            if self.operator_ui is not None:
+                self.operator_ui.stop()

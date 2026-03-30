@@ -167,6 +167,11 @@ class IrrigationOrchestrator:
         if not self._is_valid_transition(current_lifecycle=execution["lifecycle"], next_lifecycle=next_lifecycle, message_kind="RESULT"):
             self._reject_protocol_message("RESULT", result.trace_id, result.command_id, result.device_id, result.zone_id, f"malformed_transition:{execution['lifecycle']}->{next_lifecycle.value}")
             return None
+        self._store.update_execution(
+            execution_id,
+            updated_at_ms=result.local_timestamp_ms,
+            result_payload_update={"last_result": result.model_dump(), "observed_state": result.observed_state},
+        )
         self._audit(result.trace_id, "COMMAND_RESULT", "device returned result", result.command_id, execution_id, result.device_id, result.zone_id, {"step": execution.get("active_step"), "status": result.status, "metrics": result.metrics, "error_code": result.error_code})
         if result.status in {"failed", "expired", "aborted"}:
             terminal = CommandLifecycle.EXPIRED if result.status == "expired" else CommandLifecycle.ABORTED

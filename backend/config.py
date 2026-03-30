@@ -51,6 +51,13 @@ class OpenClawOperatorConfig:
 
 
 @dataclass(frozen=True)
+class OperatorUiConfig:
+    enabled: bool
+    host: str
+    port: int
+
+
+@dataclass(frozen=True)
 class ZoneSafetyConfig:
     zone_id: str
     cooldown_sec: int = 300
@@ -89,6 +96,7 @@ class BackendConfig:
     influx: InfluxConfig
     llama: LlamaConfig
     openclaw: OpenClawOperatorConfig
+    operator_ui: OperatorUiConfig
     global_safety: GlobalSafetyConfig
     state_store_backend: str = "sqlite"
     telemetry_history_backend: str = "influx"
@@ -145,6 +153,11 @@ def load_backend_config() -> BackendConfig:
             enabled=os.getenv("OPENCLAW_OPERATOR_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"},
             base_url=os.getenv("OPENCLAW_OPERATOR_URL", "").strip(),
             api_key=os.getenv("OPENCLAW_OPERATOR_KEY", "").strip(),
+        ),
+        operator_ui=OperatorUiConfig(
+            enabled=os.getenv("OPERATOR_UI_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"},
+            host=os.getenv("OPERATOR_UI_HOST", "127.0.0.1").strip() or "127.0.0.1",
+            port=int(os.getenv("OPERATOR_UI_PORT", "8780")),
         ),
         global_safety=GlobalSafetyConfig(
             max_simultaneous_zones=int(os.getenv("GLOBAL_MAX_SIMULTANEOUS_ZONES", "1")),

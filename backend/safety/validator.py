@@ -48,6 +48,7 @@ class SafetyValidator:
         current_state = store.get_current_state()
         telemetry = zone.get("telemetry", {})
         now_ms = int(proposal.requested_at_ms if proposal.requested_at_ms is not None else time.time() * 1000)
+        activating_action = self._is_activating_action(proposal.action)
 
         if proposal.actuator not in self._allowed_actions:
             reasons.append(f"actuator_not_allowed:{proposal.actuator}")
@@ -58,16 +59,17 @@ class SafetyValidator:
         if proposal.origin != DecisionOrigin.OPERATOR and not automation_enabled:
             reasons.append("automation_disabled")
 
-        if current_state.get("global", {}).get("emergency_stop"):
+        if activating_action and current_state.get("global", {}).get("emergency_stop"):
             reasons.append("global_emergency_stop")
-        if zone.get("blocked"):
+        if activating_action and zone.get("blocked"):
             reasons.append(f"zone_blocked:{proposal.zone_id}")
 
-        for lock in store.get_active_safety_locks("global"):
-            reasons.append(f"global_lock:{lock['kind']}")
-        for lock in store.get_active_safety_locks("zone", proposal.zone_id):
-            if lock.get("kind") != "execution_reservation":
-                reasons.append(f"zone_lock:{lock['kind']}")
+        if activating_action:
+            for lock in store.get_active_safety_locks("global"):
+                reasons.append(f"global_lock:{lock['kind']}")
+            for lock in store.get_active_safety_locks("zone", proposal.zone_id):
+                if lock.get("kind") != "execution_reservation":
+                    reasons.append(f"zone_lock:{lock['kind']}")
 
         manual_lease = store.get_active_manual_lease(proposal.zone_id)
         if manual_lease and proposal.origin != DecisionOrigin.OPERATOR:
@@ -75,8 +77,11 @@ class SafetyValidator:
 
         if proposal.duration_sec > int(zone.get("max_duration_per_run_sec") or 0):
             reasons.append("duration_exceeds_zone_limit")
+        if proposal.actuator == "master_pump" and proposal.action.upper() == "ON":
+            if proposal.duration_sec > int(self._config.global_safety.master_pump_timeout_sec):
+                reasons.append("duration_exceeds_pump_limit")
 
-        if proposal.action.upper() in {"START", "OPEN", "ON"}:
+        if activating_action:
             connectivity = str(device.get("connectivity") or "").lower()
             if connectivity in {"offline", "safe_mode"}:
                 reasons.append("device_offline")
@@ -87,9 +92,35 @@ class SafetyValidator:
             if now_ms < int(last_watering_at_ms) + cooldown_sec * 1000:
                 reasons.append("zone_cooldown_active")
 
+        if proposal.actuator == "irrigation_valve" and proposal.action.upper() == "OPEN":
+            if zone.get("device_state", {}).get("valve_open") is True:
+                reasons.append("valve_already_open")
+            elif any(
+                other_zone.get("zone_id") != proposal.zone_id and other_zone.get("reserved_by_execution")
+                for other_zone in current_state.get("zones", {}).values()
+            ):
+                reasons.append("valve_interlock_active")
+
+        if proposal.actuator == "master_pump" and proposal.action.upper() == "ON":
+            if device.get("state", {}).get("pump_on") is True:
+                reasons.append("pump_already_on")
+            if not zone.get("device_state", {}).get("valve_open") and not zone.get("reserved_by_execution"):
+                reasons.append("pump_precondition_no_open_valve")
+            if telemetry.get("leak") is True and self._config.global_safety.leak_shutdown_enabled:
+                reasons.append("leak_detected")
+            if telemetry.get("overflow") is True:
+                reasons.append("overflow_detected")
+            tank_level = telemetry.get("tank_level")
+            if isinstance(tank_level, (int, float)) and float(tank_level) <= 0:
+                reasons.append("water_source_unavailable")
+            if telemetry.get("water_available") is False:
+                reasons.append("water_source_unavailable")
+
         if proposal.actuator == "irrigation_sequence" and proposal.action.upper() == "START":
             if store.count_active_irrigation_executions() >= int(current_state.get("global", {}).get("max_simultaneous_zones") or 1):
                 reasons.append("max_simultaneous_zones_reached")
+            if zone.get("device_state", {}).get("valve_open") is True:
+                reasons.append("valve_already_open")
             if telemetry.get("leak") is True and self._config.global_safety.leak_shutdown_enabled:
                 reasons.append("leak_detected")
             if telemetry.get("overflow") is True:
@@ -123,11 +154,16 @@ class SafetyValidator:
             max_duration_ms=proposal.duration_sec * 1000,
         )
 
+    @staticmethod
+    def _is_activating_action(action: str) -> bool:
+        return action.upper() in {"START", "OPEN", "ON", "DIM_50"}
+
     def build_command_record(self, proposal: ActionProposal) -> CommandRecord:
         created_at_ms = proposal.requested_at_ms if proposal.requested_at_ms is not None else int(time.time() * 1000)
         expires_at_ms = created_at_ms + self._config.global_safety.command_ttl_sec * 1000
         command_id = proposal.command_id or f"cmd-{uuid.uuid4().hex[:12]}"
         command_type = CommandType.IRRIGATE_ZONE if proposal.actuator == "irrigation_sequence" else CommandType.SET_ACTUATOR
+        proposal_metadata = dict(proposal.metadata)
         return CommandRecord(
             command_id=command_id,
             trace_id=proposal.trace_id,
@@ -151,5 +187,8 @@ class SafetyValidator:
                 "device_binding": proposal.device_id,
                 "zone_binding": proposal.zone_id,
                 "replay_window_ms": self._config.global_safety.command_ttl_sec * 1000,
+                "operator_id": proposal_metadata.get("operator_id"),
+                "operator_name": proposal_metadata.get("operator_name"),
+                "submitted_via": proposal_metadata.get("submitted_via"),
             },
         )
