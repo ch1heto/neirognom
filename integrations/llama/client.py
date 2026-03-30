@@ -25,11 +25,7 @@ class LlamaDecisionClient:
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "You are a greenhouse reasoning engine. "
-                        "Return only one valid JSON object and no other text, markdown, explanations, or code fences. "
-                        "The JSON object must contain only schema-valid decision fields."
-                    ),
+                    "content": self._system_prompt(),
                 },
                 {
                     "role": "user",
@@ -58,10 +54,27 @@ class LlamaDecisionClient:
             log.error("Llama response did not contain extractable content")
             return None
         try:
-            return LlmDecisionResponse.model_validate_json(content)
+            return LlmDecisionResponse.model_validate_json(content.strip())
         except Exception as exc:
             log.error("Llama response validation failed: %s", exc)
             return None
+
+    @staticmethod
+    def _system_prompt() -> str:
+        return (
+            "You are a greenhouse reasoning engine. "
+            "Return exactly one JSON object and nothing else. "
+            "Do not output markdown, code fences, prose, comments, or explanations. "
+            "The JSON must match this exact schema with no extra fields: "
+            '{"decision":"no_action|water_zone|stop_zone|ventilate_zone|block_zone",'
+            '"zone_id":"string","actuator":"string|null","action":"string|null",'
+            '"duration_sec":"integer|null","reason":"string","confidence":"number"} '
+            "Required fields are: decision, zone_id, reason, confidence. "
+            "Optional fields are: actuator, action, duration_sec. "
+            "Do not use alternative field names. "
+            "Do not include fields like max_duration_sec, description, notes, or metadata. "
+            "If decision is no_action, you must still include zone_id, reason, and confidence."
+        )
 
     @staticmethod
     def _extract_content(body: dict[str, Any]) -> str | None:
@@ -69,8 +82,17 @@ class LlamaDecisionClient:
         if isinstance(choices, list) and choices:
             first = choices[0] or {}
             message = first.get("message") or {}
-            if isinstance(message, dict) and isinstance(message.get("content"), str):
-                return message["content"]
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    text_parts: list[str] = []
+                    for part in content:
+                        if isinstance(part, dict) and isinstance(part.get("text"), str):
+                            text_parts.append(part["text"])
+                    if text_parts:
+                        return "".join(text_parts)
         for key in ("content", "response"):
             value = body.get(key)
             if isinstance(value, str):

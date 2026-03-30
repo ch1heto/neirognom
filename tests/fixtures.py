@@ -88,10 +88,41 @@ def llama_water_response(*, zone_id: str = "tray_1", duration_sec: int = 12, con
     }
 
 
+def llama_no_action_response(*, zone_id: str = "tray_1", confidence: float = 0.92) -> dict[str, Any]:
+    return {
+        "decision": "no_action",
+        "zone_id": zone_id,
+        "reason": "conditions are within target range",
+        "confidence": confidence,
+    }
+
+
 def llama_invalid_response() -> dict[str, Any]:
     return {
         "decision": "water_zone",
         "zone": "tray_1",
+    }
+
+
+def llama_invalid_extra_fields_response(*, zone_id: str = "tray_1") -> dict[str, Any]:
+    return {
+        "decision": "water_zone",
+        "zone_id": zone_id,
+        "duration_sec": 10,
+        "reason": "soil moisture below threshold",
+        "confidence": 0.8,
+        "max_duration_sec": 10,
+        "description": "extra field not allowed",
+    }
+
+
+def llama_missing_required_fields_response() -> dict[str, Any]:
+    return {
+        "decision": "water_zone",
+        "actuator": "irrigation_sequence",
+        "action": "START",
+        "duration_sec": 10,
+        "reason": "missing zone_id and confidence",
     }
 
 
