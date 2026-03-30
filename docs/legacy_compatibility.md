@@ -1,21 +1,26 @@
 # Legacy Compatibility Notes
 
-The modules below are deprecated compatibility artifacts and are not part of the active runtime path:
+The modules below are deprecated compatibility artifacts and are not part of the active runtime path.
+Their implementation now lives under `legacy/`. The old root-level filenames are thin shims only.
 
 - `smart_bridge.py`
   - compatibility entrypoint that delegates to `backend.runtime.BackendRuntime`
-- `command_gateway.py`
+- `legacy/command_gateway.py`
   - legacy bridge-era command gateway
-- `control_runtime.py`
+- `legacy/control_runtime.py`
   - legacy bridge-era effect/escalation runtime
-- `dashboard_server.py`
+- `legacy/dashboard_server.py`
   - legacy bridge/OpenClaw diagnostic dashboard
-- `operator_cli.py`
+- `legacy/operator_cli.py`
   - legacy inspection helper; direct reset path is disabled by default
-- `openclaw_client.py`
+- `legacy/openclaw_client.py`
   - diagnostics-only OpenClaw transport helper, not the runtime center
-- `database.py`
+- `legacy/database.py`
   - legacy bridge audit/event store, separate from the current backend SQLite state store
+- `legacy/control_config.py`
+  - legacy bridge runtime profile/knowledge-base configuration
+- `legacy/influx_writer.py`
+  - legacy Influx retry/buffering helper
 
 ## Current replacements
 

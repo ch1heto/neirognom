@@ -57,6 +57,8 @@ Architecture notes:
   - canonical runtime wiring
 - `backend_server.py`
   - canonical entrypoint
+- `legacy/`
+  - isolated bridge-era compatibility modules and diagnostics helpers
 - `smart_bridge.py`
   - deprecated adapter to the new backend runtime
 
@@ -143,7 +145,7 @@ It is not used for command state, safety locks, leases, alarms, or execution rec
 
 ## Legacy Isolation
 
-Legacy bridge-era modules are intentionally left in place only where full removal would be risky. They are deprecated compatibility artifacts, not active runtime layers:
+Legacy bridge-era modules are intentionally isolated under `legacy/`. The old top-level module names are now thin deprecated shims only, kept so older scripts do not break during migration.
 
 - `smart_bridge.py`
 - `command_gateway.py`
@@ -153,7 +155,7 @@ Legacy bridge-era modules are intentionally left in place only where full remova
 - `openclaw_client.py`
 - `database.py`
 
-See [legacy_compatibility.md](/V:/work/DIPLOM/testMoskitto/docs/legacy_compatibility.md) for replacement mappings.
+The implementation now lives under `legacy/`; see [legacy_compatibility.md](/V:/work/DIPLOM/testMoskitto/docs/legacy_compatibility.md) for replacement mappings.
 
 ## Security model
 
@@ -206,6 +208,7 @@ Layered backend tests live under `tests/`:
 - `test_backend_ai_flow.py`
 - `test_backend_operator_flow.py`
 - `test_backend_architecture.py`
+- `test_architecture_cleanup.py`
 - `test_operator_ui_service.py`
 - `test_openclaw_mcp.py`
 

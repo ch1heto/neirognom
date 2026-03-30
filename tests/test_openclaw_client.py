@@ -111,7 +111,7 @@ class OpenClawClientTests(unittest.TestCase):
             "response_preview": "",
             "error": openclaw_client.WEBSOCKET_UNSUPPORTED_ERROR,
             "last_exception_text": openclaw_client.WEBSOCKET_UNSUPPORTED_ERROR,
-            "last_exception_type": "UnsupportedTransportError",
+            "last_exception_type": "ConfigurationError",
             "config_error": openclaw_client.WEBSOCKET_UNSUPPORTED_ERROR,
         }
 
@@ -128,7 +128,7 @@ class OpenClawClientTests(unittest.TestCase):
         self.assertEqual(diagnostics["effective_url"], "ws://127.0.0.1:18789")
         self.assertTrue(diagnostics["tcp_connect_ok"])
         self.assertFalse(diagnostics["roundtrip_ok"])
-        self.assertEqual(diagnostics["last_exception_type"], "UnsupportedTransportError")
+        self.assertEqual(diagnostics["last_exception_type"], "ConfigurationError")
         self.assertEqual(diagnostics["last_exception_text"], openclaw_client.WEBSOCKET_UNSUPPORTED_ERROR)
         self.assertIn("websocket_client_installed", diagnostics["dependency_status"])
 

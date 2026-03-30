@@ -18,6 +18,9 @@
 4. `Operator adapters`
    - web UI
    - OpenClaw MCP client
+5. `Legacy compatibility area`
+   - isolated under `legacy/`
+   - not part of the runtime control path
 
 ## Safety boundary
 
