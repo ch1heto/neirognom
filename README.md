@@ -46,6 +46,8 @@ This repository now targets a backend-centric greenhouse runtime with a strict e
   - local Llama API adapter
 - `integrations/openclaw_mcp/tools.py`
   - OpenClaw MCP adapter
+- `integrations/openclaw_mcp/server.py`
+  - HTTP/JSON-RPC MCP-compatible tool server for OpenClaw
 - `backend/runtime.py`
   - canonical runtime wiring
 - `backend_server.py`
@@ -153,6 +155,8 @@ Key variables:
 - `ZONE_IDS`
 - `LLAMA_API_URL`, `LLAMA_MODEL`
 - `OPENCLAW_OPERATOR_ENABLED`, `OPENCLAW_OPERATOR_URL`
+- `OPENCLAW_MCP_ENABLED`, `OPENCLAW_MCP_HOST`, `OPENCLAW_MCP_PORT`
+- `OPENCLAW_MCP_ACTION_TOKEN`, `OPENCLAW_MCP_REQUIRE_ACTION_TOKEN`
 - `BROKER_RECONNECT_LOCK_SEC`
 - `ANOMALY_LOOKBACK_SEC`
 - `MIN_PRESSURE_KPA`, `MAX_PRESSURE_KPA`
@@ -170,6 +174,10 @@ If `OPERATOR_UI_ENABLED=1`, the backend also hosts the operator UI at `http://12
 
 Operator UI notes: [operator_ui.md](/V:/work/DIPLOM/testMoskitto/docs/operator_ui.md)
 
+If `OPENCLAW_MCP_ENABLED=1`, the backend also hosts the OpenClaw MCP adapter at `http://127.0.0.1:8790/mcp` by default.
+
+OpenClaw MCP notes: [openclaw_mcp.md](/V:/work/DIPLOM/testMoskitto/docs/openclaw_mcp.md)
+
 ## Testing
 
 Layered backend tests live under `tests/`:
@@ -180,6 +188,7 @@ Layered backend tests live under `tests/`:
 - `test_backend_operator_flow.py`
 - `test_backend_architecture.py`
 - `test_operator_ui_service.py`
+- `test_openclaw_mcp.py`
 
 Reusable test fixtures and the in-memory backend harness live in `tests/fixtures.py` and `tests/harness.py`.
 

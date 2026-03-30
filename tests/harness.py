@@ -16,6 +16,8 @@ from backend.security.monitor import SecurityMonitor
 from backend.safety.validator import SafetyValidator
 from backend.state.influx import MemoryTelemetryHistoryStore
 from backend.state.store import MemoryStateStore
+from integrations.openclaw_mcp.server import OpenClawMcpServer
+from integrations.openclaw_mcp.tools import OpenClawMcpAdapter
 from mqtt.topics import command_ack_topic, command_result_topic, state_topic, telemetry_topic
 from shared.contracts.messages import LlmDecisionResponse
 
@@ -50,14 +52,16 @@ class StubLlamaClient:
 
 
 class BackendTestHarness:
-    def __init__(self, *, command_ttl_sec: int | None = None, max_simultaneous_zones: int | None = None) -> None:
+    def __init__(self, *, command_ttl_sec: int | None = None, max_simultaneous_zones: int | None = None, mcp_action_token: str = "test-mcp-token") -> None:
         config = load_backend_config()
         global_safety = config.global_safety
+        openclaw_mcp = config.openclaw_mcp
         if command_ttl_sec is not None:
             global_safety = replace(global_safety, command_ttl_sec=command_ttl_sec)
         if max_simultaneous_zones is not None:
             global_safety = replace(global_safety, max_simultaneous_zones=max_simultaneous_zones)
-        self.config = replace(config, global_safety=global_safety)
+        openclaw_mcp = replace(openclaw_mcp, action_auth_token=mcp_action_token, require_action_token=True)
+        self.config = replace(config, global_safety=global_safety, openclaw_mcp=openclaw_mcp)
 
         self.store = MemoryStateStore()
         self.store.initialize(self.config.zone_configs(), self.config.global_safety)
@@ -71,6 +75,15 @@ class BackendTestHarness:
         self.ingestion = IngestionService(self.store, self.telemetry_history, self.decision_engine, self.dispatcher, self.security_monitor)
         self.tools = BackendToolService(self.store, self.telemetry_history, self.dispatcher)
         self.operator = OperatorControlService(self.config, self.store, self.telemetry_history, self.tools)
+        self.mcp_adapter = OpenClawMcpAdapter(self.operator, self.config.openclaw_mcp)
+        self.mcp_server = OpenClawMcpServer(
+            "127.0.0.1",
+            0,
+            self.mcp_adapter,
+            server_name=self.config.openclaw_mcp.server_name,
+            server_version=self.config.openclaw_mcp.server_version,
+            lazy_bind=True,
+        )
 
     def seed_device_state(self, payload: dict[str, Any]) -> None:
         self.ingest_state(payload)

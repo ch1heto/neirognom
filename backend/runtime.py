@@ -19,6 +19,7 @@ from backend.safety.validator import SafetyValidator
 from backend.state.influx import build_telemetry_history_store
 from backend.state.store import build_state_store
 from integrations.llama.client import LlamaDecisionClient
+from integrations.openclaw_mcp.server import OpenClawMcpServer
 from integrations.openclaw_mcp.tools import OpenClawMcpAdapter
 
 
@@ -47,10 +48,21 @@ class BackendRuntime:
         self.ingestion = IngestionService(self.state_store, self.telemetry_history, self.decision_engine, self.dispatcher, self.security_monitor)
         self.backend_tools = BackendToolService(self.state_store, self.telemetry_history, self.dispatcher)
         self.operator_service = OperatorControlService(self.config, self.state_store, self.telemetry_history, self.backend_tools)
-        self.openclaw_adapter = OpenClawMcpAdapter(self.backend_tools)
+        self.openclaw_adapter = OpenClawMcpAdapter(self.operator_service, self.config.openclaw_mcp)
         self.operator_ui = (
             OperatorUiServer(self.config.operator_ui.host, self.config.operator_ui.port, self.operator_service)
             if self.config.operator_ui.enabled
+            else None
+        )
+        self.openclaw_mcp_server = (
+            OpenClawMcpServer(
+                self.config.openclaw_mcp.host,
+                self.config.openclaw_mcp.port,
+                self.openclaw_adapter,
+                server_name=self.config.openclaw_mcp.server_name,
+                server_version=self.config.openclaw_mcp.server_version,
+            )
+            if self.config.openclaw_mcp.enabled
             else None
         )
 
@@ -90,7 +102,7 @@ class BackendRuntime:
 
     def run(self) -> None:
         log.info(
-            "backend startup mqtt=%s:%d sqlite=%s influx_enabled=%s llama=%s openclaw_operator_enabled=%s operator_ui=%s zones=%s",
+            "backend startup mqtt=%s:%d sqlite=%s influx_enabled=%s llama=%s openclaw_operator_enabled=%s operator_ui=%s openclaw_mcp=%s zones=%s",
             self.config.mqtt.host,
             self.config.mqtt.port,
             self.config.sqlite.path,
@@ -98,10 +110,13 @@ class BackendRuntime:
             self.config.llama.api_url,
             self.config.openclaw.enabled,
             self.operator_ui.url if self.operator_ui else "disabled",
+            self.openclaw_mcp_server.url if self.openclaw_mcp_server else "disabled",
             ",".join(self.config.zone_ids),
         )
         if self.operator_ui is not None:
             self.operator_ui.start()
+        if self.openclaw_mcp_server is not None:
+            self.openclaw_mcp_server.start()
         self.mqtt.connect(self.config.mqtt.host, self.config.mqtt.port, keepalive=60)
         self.mqtt.loop_start()
         try:
@@ -114,5 +129,7 @@ class BackendRuntime:
         finally:
             self.mqtt.loop_stop()
             self.mqtt.disconnect()
+            if self.openclaw_mcp_server is not None:
+                self.openclaw_mcp_server.stop()
             if self.operator_ui is not None:
                 self.operator_ui.stop()

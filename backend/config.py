@@ -58,6 +58,17 @@ class OperatorUiConfig:
 
 
 @dataclass(frozen=True)
+class OpenClawMcpConfig:
+    enabled: bool
+    host: str
+    port: int
+    server_name: str
+    server_version: str
+    action_auth_token: str
+    require_action_token: bool = True
+
+
+@dataclass(frozen=True)
 class ZoneSafetyConfig:
     zone_id: str
     cooldown_sec: int = 300
@@ -97,6 +108,7 @@ class BackendConfig:
     llama: LlamaConfig
     openclaw: OpenClawOperatorConfig
     operator_ui: OperatorUiConfig
+    openclaw_mcp: OpenClawMcpConfig
     global_safety: GlobalSafetyConfig
     state_store_backend: str = "sqlite"
     telemetry_history_backend: str = "influx"
@@ -158,6 +170,15 @@ def load_backend_config() -> BackendConfig:
             enabled=os.getenv("OPERATOR_UI_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"},
             host=os.getenv("OPERATOR_UI_HOST", "127.0.0.1").strip() or "127.0.0.1",
             port=int(os.getenv("OPERATOR_UI_PORT", "8780")),
+        ),
+        openclaw_mcp=OpenClawMcpConfig(
+            enabled=os.getenv("OPENCLAW_MCP_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"},
+            host=os.getenv("OPENCLAW_MCP_HOST", "127.0.0.1").strip() or "127.0.0.1",
+            port=int(os.getenv("OPENCLAW_MCP_PORT", "8790")),
+            server_name=os.getenv("OPENCLAW_MCP_SERVER_NAME", "greenhouse-backend-mcp").strip() or "greenhouse-backend-mcp",
+            server_version=os.getenv("OPENCLAW_MCP_SERVER_VERSION", "1.0.0").strip() or "1.0.0",
+            action_auth_token=os.getenv("OPENCLAW_MCP_ACTION_TOKEN", "").strip(),
+            require_action_token=os.getenv("OPENCLAW_MCP_REQUIRE_ACTION_TOKEN", "1").strip().lower() in {"1", "true", "yes", "on"},
         ),
         global_safety=GlobalSafetyConfig(
             max_simultaneous_zones=int(os.getenv("GLOBAL_MAX_SIMULTANEOUS_ZONES", "1")),

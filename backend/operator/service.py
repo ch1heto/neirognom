@@ -35,6 +35,41 @@ class OperatorControlService:
         zones.sort(key=lambda item: item["zone_id"])
         return {"devices": devices, "zones": zones, "generated_at_ms": self._now_ms()}
 
+    def get_current_state(self) -> dict[str, Any]:
+        return self._plain(self._backend_tools.get_current_state())
+
+    def get_device_status(self, device_id: str) -> dict[str, Any]:
+        snapshot = self.list_devices_zones()
+        for device in snapshot["devices"]:
+            if device["device_id"] == device_id:
+                return device
+        return {
+            "device_id": device_id,
+            "status": "not_found",
+            "generated_at_ms": self._now_ms(),
+        }
+
+    def get_zone_status(self, zone_id: str) -> dict[str, Any]:
+        snapshot = self.list_devices_zones()
+        for zone in snapshot["zones"]:
+            if zone["zone_id"] == zone_id:
+                return zone
+        return {
+            "zone_id": zone_id,
+            "status": "not_found",
+            "generated_at_ms": self._now_ms(),
+        }
+
+    def get_sensor_history(self, device_id: str, sensor: str, start_ms: int, end_ms: int, limit: int = 500) -> dict[str, Any]:
+        return {
+            "device_id": device_id,
+            "sensor": sensor,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "samples": self._plain(self._backend_tools.get_sensor_history(device_id, sensor, start_ms, end_ms, limit=limit)),
+            "generated_at_ms": self._now_ms(),
+        }
+
     def get_control_safety_state(self) -> dict[str, Any]:
         current_state = self._state_store.get_current_state()
         commands = self.command_history(limit=50)["commands"]
@@ -61,12 +96,24 @@ class OperatorControlService:
                 result["command"] = self._serialize_command(status)
         return self._plain(result)
 
+    def propose_action(self, payload: dict[str, Any]) -> dict[str, Any]:
+        action = self._normalize_manual_action(payload)
+        proposal = self._backend_tools.propose_action(action)
+        zone_status = self.get_zone_status(action["zone_id"])
+        proposal["normalized_action"] = action
+        proposal["zone_status"] = zone_status
+        return self._plain(proposal)
+
+    def execute_manual_action(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.submit_manual_command(payload)
+
     def emergency_stop(self, payload: dict[str, Any]) -> dict[str, Any]:
         now_ms = self._now_ms()
         operator_id = str(payload.get("operator_id") or "operator")
         operator_name = str(payload.get("operator_name") or operator_id)
         reason = str(payload.get("reason") or "manual emergency stop")
         trace_id = str(payload.get("trace_id") or f"trace-emergency-{now_ms}")
+        submitted_via = str(payload.get("submitted_via") or "operator_ui")
 
         lock = SafetyLockRecord(
             lock_id="lock-global-backend-runtime-manual-emergency-stop",
@@ -86,7 +133,7 @@ class OperatorControlService:
                 flag_name="automation_enabled",
                 enabled=False,
                 updated_at_ms=now_ms,
-                payload={"disabled_by": operator_id, "reason": reason, "source": "operator_ui"},
+                payload={"disabled_by": operator_id, "reason": reason, "source": submitted_via},
             )
         )
         self._state_store.append_audit_log(
@@ -120,6 +167,7 @@ class OperatorControlService:
                         "duration_sec": 0,
                         "reason": f"emergency stop close valve: {reason}",
                         "metadata": {"emergency_stop": True},
+                        "submitted_via": submitted_via,
                     }
                 )
             )
@@ -138,6 +186,7 @@ class OperatorControlService:
                             "duration_sec": 0,
                             "reason": f"emergency stop stop pump: {reason}",
                             "metadata": {"emergency_stop": True},
+                            "submitted_via": submitted_via,
                         }
                     )
                 )
@@ -188,11 +237,12 @@ class OperatorControlService:
         duration_sec = min(max(0, requested_duration_sec), duration_cap) if duration_cap > 0 else 0
 
         metadata = dict(payload.get("metadata", {}))
+        submitted_via = str(payload.get("submitted_via") or "operator_ui")
         metadata.update(
             {
                 "operator_id": str(payload.get("operator_id") or "operator"),
                 "operator_name": str(payload.get("operator_name") or payload.get("operator_id") or "operator"),
-                "submitted_via": "operator_ui",
+                "submitted_via": submitted_via,
                 "requested_duration_sec": requested_duration_sec,
                 "duration_cap_sec": duration_cap,
                 "ui_action": ui_action or None,
