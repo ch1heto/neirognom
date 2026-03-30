@@ -4,11 +4,12 @@ import logging
 import uuid
 
 from backend.config import BackendConfig
+from backend.decision_engine.context_builder import DecisionContextBuilder
 from backend.safety.validator import ActionProposal
 from backend.state.influx import TelemetryHistoryStore
 from backend.state.store import StateStore
 from integrations.llama.client import LlamaDecisionClient
-from shared.contracts.messages import AlertEvent, DecisionOrigin, LlmDecisionRequest, TelemetryMessage
+from shared.contracts.messages import AlertEvent, DecisionOrigin, TelemetryMessage
 
 
 log = logging.getLogger("backend.decision")
@@ -20,6 +21,7 @@ class DecisionEngine:
         self._store = store
         self._telemetry_history = telemetry_history
         self._llama = llama_client
+        self._context_builder = DecisionContextBuilder(config, store, telemetry_history)
 
     def evaluate_telemetry(self, message: TelemetryMessage) -> ActionProposal | None:
         telemetry = message.sensors
@@ -29,15 +31,7 @@ class DecisionEngine:
         if deterministic is not None:
             return deterministic
 
-        llm_request = LlmDecisionRequest(
-            trace_id=message.trace_id,
-            device_id=message.device_id,
-            zone_id=message.zone_id,
-            current_state=self._store.get_current_state(),
-            telemetry_window=self._telemetry_history.get_sensor_history(message.device_id, "soil_moisture", max(0, message.ts_ms - 3600_000), message.ts_ms, limit=50),
-            zone_limits={k: v for k, v in zone_state.items() if k not in {"telemetry", "device_state"}},
-            global_limits=self._store.get_current_state().get("global", {}),
-        )
+        llm_request = self._context_builder.build(message)
         response = self._llama.recommend(llm_request)
         if response is None or response.decision == "no_action":
             return None

@@ -70,6 +70,10 @@ def llama_invalid_response() -> dict[str, Any]:
     }
 
 
+def llama_invalid_json_response() -> str:
+    return '{"decision":"water_zone","zone_id":"tray_1",'
+
+
 def ack_payload(
     *,
     command_id: str,

@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import json
 import logging
 from typing import Any
 
@@ -28,8 +26,9 @@ class LlamaDecisionClient:
                 {
                     "role": "system",
                     "content": (
-                        "You are a greenhouse reasoning engine. Return exactly one JSON object with keys: "
-                        "decision, zone_id, actuator, action, duration_sec, reason, confidence."
+                        "You are a greenhouse reasoning engine. "
+                        "Return only one valid JSON object and no other text, markdown, explanations, or code fences. "
+                        "The JSON object must contain only schema-valid decision fields."
                     ),
                 },
                 {
@@ -72,13 +71,8 @@ class LlamaDecisionClient:
             message = first.get("message") or {}
             if isinstance(message, dict) and isinstance(message.get("content"), str):
                 return message["content"]
-        for key in ("content", "response", "text", "output"):
+        for key in ("content", "response"):
             value = body.get(key)
             if isinstance(value, str):
                 return value
-        if isinstance(body, dict):
-            try:
-                return json.dumps(body, ensure_ascii=False)
-            except TypeError:
-                return None
         return None

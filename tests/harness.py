@@ -38,13 +38,18 @@ class DummyMqttClient:
 
 class StubLlamaClient:
     def __init__(self) -> None:
-        self.response: LlmDecisionResponse | dict[str, Any] | None = None
+        self.response: LlmDecisionResponse | dict[str, Any] | str | None = None
         self.calls: list[Any] = []
 
     def recommend(self, request):
         self.calls.append(request)
         if self.response is None or isinstance(self.response, LlmDecisionResponse):
             return self.response
+        if isinstance(self.response, str):
+            try:
+                return LlmDecisionResponse.model_validate_json(self.response)
+            except Exception:
+                return None
         try:
             return LlmDecisionResponse.model_validate(self.response)
         except Exception:

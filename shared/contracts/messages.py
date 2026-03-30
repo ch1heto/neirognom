@@ -424,14 +424,49 @@ class SafetyDecision(StrictModel):
     max_duration_ms: int | None = Field(default=None, ge=0)
 
 
+class LlmAllowedAction(StrictModel):
+    decision: Literal["no_action", "water_zone", "stop_zone", "ventilate_zone", "block_zone"]
+    actuator: str | None = None
+    action: str | None = None
+    max_duration_sec: int = Field(default=0, ge=0, le=3600)
+    description: str = ""
+
+
 class LlmDecisionRequest(StrictModel):
     trace_id: str = Field(min_length=8, max_length=128)
     device_id: str = Field(min_length=1, max_length=64)
     zone_id: str = Field(min_length=1, max_length=64)
-    current_state: dict[str, Any]
-    telemetry_window: list[dict[str, Any]] = Field(default_factory=list)
+    zone_state: dict[str, Any] = Field(default_factory=dict)
+    device_state: dict[str, Any] = Field(default_factory=dict)
+    global_state: dict[str, Any] = Field(default_factory=dict)
     zone_limits: dict[str, Any] = Field(default_factory=dict)
     global_limits: dict[str, Any] = Field(default_factory=dict)
+    active_safety_locks: list[dict[str, Any]] = Field(default_factory=list)
+    active_alarms: list[dict[str, Any]] = Field(default_factory=list)
+    automation_flags: dict[str, Any] = Field(default_factory=dict)
+    recent_zone_commands: list[dict[str, Any]] = Field(default_factory=list)
+    recent_device_commands: list[dict[str, Any]] = Field(default_factory=list)
+    telemetry_windows: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    allowed_actions: list[LlmAllowedAction] = Field(default_factory=list)
+    current_state: dict[str, Any] = Field(default_factory=dict)
+    telemetry_window: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _compat(cls, data: Any) -> Any:
+        payload = _as_payload(data)
+        if not payload:
+            return data
+        current_state = payload.get("current_state")
+        if not payload.get("zone_state") and isinstance(current_state, dict):
+            payload["zone_state"] = ((current_state.get("zones") or {}).get(payload.get("zone_id")) or {})
+        if not payload.get("device_state") and isinstance(current_state, dict):
+            payload["device_state"] = ((current_state.get("devices") or {}).get(payload.get("device_id")) or {})
+        if not payload.get("global_state") and isinstance(current_state, dict):
+            payload["global_state"] = current_state.get("global") or {}
+        if not payload.get("telemetry_windows") and isinstance(payload.get("telemetry_window"), list):
+            payload["telemetry_windows"] = {"soil_moisture": payload.get("telemetry_window", [])}
+        return payload
 
 
 class LlmDecisionResponse(StrictModel):
