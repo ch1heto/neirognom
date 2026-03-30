@@ -1,4 +1,4 @@
-# Operator UI
+﻿# Operator UI
 
 The operator web UI is a thin HTTP layer hosted inside the backend runtime. It never publishes MQTT directly.
 
@@ -11,9 +11,11 @@ Runtime path:
 ## Available actions
 
 - view device and zone status
+- switch the backend between auto and manual mode
 - open / close valve
 - start / stop pump
-- trigger test watering for a zone
+- start / stop nutrient dosing
+- review the live event log and export visible events to CSV
 - emergency stop
 
 All manual actions:
@@ -51,6 +53,11 @@ http://127.0.0.1:8780
 - `GET /api/operator/overview`
 - `GET /api/operator/devices-zones`
 - `GET /api/operator/state`
+- `GET /api/operator/system-mode`
+- `GET /api/operator/event-log?limit=200`
 - `GET /api/operator/commands?limit=50`
+- `POST /api/operator/system-mode`
+- `POST /api/operator/manual-command`
 - `POST /api/operator/command`
 - `POST /api/operator/emergency-stop`
+

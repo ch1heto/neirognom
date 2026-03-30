@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import time
 import uuid
@@ -70,12 +70,73 @@ class OperatorControlService:
             "generated_at_ms": self._now_ms(),
         }
 
+    def get_system_mode(self) -> str:
+        flags = self._state_store.get_automation_flags()
+        return self._system_mode_from_flags(flags)
+
+    def get_system_mode_state(self) -> dict[str, Any]:
+        mode = self.get_system_mode()
+        return {
+            "system_mode": mode,
+            "automation_enabled": mode == "auto",
+            "generated_at_ms": self._now_ms(),
+        }
+
+    def set_system_mode(self, payload: dict[str, Any]) -> dict[str, Any]:
+        now_ms = self._now_ms()
+        mode = self._resolve_system_mode(payload)
+        automation_enabled = mode == "auto"
+        operator_id = str(payload.get("operator_id") or "operator")
+        operator_name = str(payload.get("operator_name") or operator_id)
+        submitted_via = self._normalize_submitted_via(payload.get("submitted_via"))
+        reason = str(payload.get("reason") or f"operator switched system mode to {mode}")
+        trace_id = str(payload.get("trace_id") or f"trace-system-mode-{now_ms}")
+
+        flag = AutomationFlagRecord(
+            flag_name="automation_enabled",
+            enabled=automation_enabled,
+            updated_at_ms=now_ms,
+            payload={
+                "mode": mode,
+                "updated_by": operator_id,
+                "operator_name": operator_name,
+                "reason": reason,
+                "source": submitted_via,
+            },
+        )
+        self._state_store.set_automation_flag(flag)
+        self._state_store.append_audit_log(
+            AuditLogRecord(
+                audit_id=f"audit-{uuid.uuid4().hex[:12]}",
+                trace_id=trace_id,
+                action_type="SYSTEM_MODE_CHANGED",
+                message=f"system mode set to {mode}",
+                created_at_ms=now_ms,
+                payload={
+                    "system_mode": mode,
+                    "automation_enabled": automation_enabled,
+                    "operator_id": operator_id,
+                    "operator_name": operator_name,
+                    "reason": reason,
+                    "submitted_via": submitted_via,
+                },
+            )
+        )
+        return {
+            "status": "ok",
+            "system_mode": mode,
+            "automation_enabled": automation_enabled,
+            "generated_at_ms": now_ms,
+        }
+
     def get_control_safety_state(self) -> dict[str, Any]:
         current_state = self._state_store.get_current_state()
         commands = self.command_history(limit=50)["commands"]
+        automation_flags = self._plain(current_state.get("automation_flags", {}))
         return {
             "global": self._plain(current_state.get("global", {})),
-            "automation_flags": self._plain(current_state.get("automation_flags", {})),
+            "automation_flags": automation_flags,
+            "system_mode": self._system_mode_from_flags(automation_flags),
             "active_safety_locks": self._plain(self._state_store.get_active_safety_locks()),
             "active_alarms": self._plain(self._state_store.get_active_alarms()),
             "active_commands": [command for command in commands if command.get("lifecycle") in ACTIVE_LIFECYCLES],
@@ -85,6 +146,15 @@ class OperatorControlService:
     def command_history(self, limit: int = 50) -> dict[str, Any]:
         commands = [self._serialize_command(command) for command in self._sorted_commands()[: max(1, min(limit, 200))]]
         return {"commands": commands, "generated_at_ms": self._now_ms()}
+
+    def get_event_log(self, limit: int = 200) -> dict[str, Any]:
+        bounded_limit = max(1, min(limit, 200))
+        audit_logs = self._state_store.get_audit_logs(limit=max(100, bounded_limit * 4))
+        alarms = self._state_store.get_recent_alarms(limit=max(50, bounded_limit), include_inactive=True)
+        events = [self._build_audit_event(item) for item in audit_logs]
+        events.extend(self._build_alarm_event(item) for item in alarms)
+        events.sort(key=lambda item: int(item.get("timestamp_ms") or 0), reverse=True)
+        return {"events": events[:bounded_limit], "generated_at_ms": self._now_ms()}
 
     def submit_manual_command(self, payload: dict[str, Any]) -> dict[str, Any]:
         action = self._normalize_manual_action(payload)
@@ -107,6 +177,8 @@ class OperatorControlService:
                     "requested_duration_sec": metadata.get("requested_duration_sec"),
                     "effective_duration_sec": metadata.get("effective_duration_sec"),
                     "manual_ttl_sec": metadata.get("manual_ttl_sec"),
+                    "ui_action": metadata.get("ui_action"),
+                    "system_mode": self.get_system_mode(),
                 },
             )
         )
@@ -138,7 +210,7 @@ class OperatorControlService:
         operator_name = str(payload.get("operator_name") or operator_id)
         reason = str(payload.get("reason") or "manual emergency stop")
         trace_id = str(payload.get("trace_id") or f"trace-emergency-{now_ms}")
-        submitted_via = str(payload.get("submitted_via") or "operator_ui")
+        submitted_via = self._normalize_submitted_via(payload.get("submitted_via"))
 
         lock = SafetyLockRecord(
             lock_id="lock-global-backend-runtime-manual-emergency-stop",
@@ -158,7 +230,7 @@ class OperatorControlService:
                 flag_name="automation_enabled",
                 enabled=False,
                 updated_at_ms=now_ms,
-                payload={"disabled_by": operator_id, "reason": reason, "source": submitted_via},
+                payload={"disabled_by": operator_id, "reason": reason, "source": submitted_via, "mode": "manual"},
             )
         )
         self._state_store.append_audit_log(
@@ -225,10 +297,12 @@ class OperatorControlService:
 
     def overview(self) -> dict[str, Any]:
         devices_zones = self.list_devices_zones()
+        state = self.get_control_safety_state()
         return {
             "devices": devices_zones["devices"],
             "zones": devices_zones["zones"],
-            "state": self.get_control_safety_state(),
+            "state": state,
+            "system_mode": state["system_mode"],
             "command_history": self.command_history(limit=25)["commands"],
             "generated_at_ms": self._now_ms(),
         }
@@ -244,7 +318,10 @@ class OperatorControlService:
         action_map = {
             "open_valve": ("irrigation_valve", "OPEN", min(10, int(zone.get("max_open_duration_sec") or zone.get("max_duration_per_run_sec") or 10))),
             "close_valve": ("irrigation_valve", "CLOSE", 0),
+            "pump_on": ("master_pump", "ON", min(int(self._config.global_safety.master_pump_timeout_sec), max(1, int(self._config.global_safety.max_manual_duration_sec)))),
+            "pump_off": ("master_pump", "OFF", 0),
             "dose_solution": ("nutrient_doser", "START", min(5, int(self._config.global_safety.max_manual_duration_sec))),
+            "stop_doser": ("nutrient_doser", "STOP", 0),
         }
         if ui_action:
             if ui_action not in action_map:
@@ -274,6 +351,7 @@ class OperatorControlService:
                 "manual_ttl_sec": manual_ttl_sec,
                 "duration_cap_sec": duration_cap,
                 "ui_action": ui_action or None,
+                "system_mode": self.get_system_mode(),
             }
         )
         return {
@@ -293,6 +371,8 @@ class OperatorControlService:
         global_manual_cap = max(0, int(self._config.global_safety.max_manual_duration_sec))
         if actuator == "nutrient_doser":
             base_cap = global_manual_cap
+        elif actuator == "master_pump":
+            base_cap = int(self._config.global_safety.master_pump_timeout_sec)
         else:
             base_cap = int(zone.get("max_open_duration_sec") or zone.get("max_duration_per_run_sec") or 0)
         if global_manual_cap <= 0:
@@ -411,9 +491,11 @@ class OperatorControlService:
         blocking_lock_reasons = [f"{lock.get('scope')}:{lock.get('kind')}" for lock in locks if lock.get("kind") != "execution_reservation"]
         telemetry = zone.get("telemetry", {})
         device_state = zone.get("device_state", {})
+        runtime_state = device.get("state", {})
         online = str(device.get("connectivity") or "").lower() == "online"
         valve_open = bool(device_state.get("valve_open"))
-        doser_active = bool(device.get("state", {}).get("doser_active") or device_state.get("doser_active"))
+        doser_active = bool(runtime_state.get("doser_active") or device_state.get("doser_active"))
+        pump_on = bool(runtime_state.get("pump_on") or device_state.get("pump_on"))
         water_level = telemetry.get("water_level")
         water_available = not isinstance(water_level, (int, float)) or float(water_level) > 10.0
         any_other_reserved = any(
@@ -435,6 +517,16 @@ class OperatorControlService:
             "close_valve": guard(valve_open or bool(zone.get("reserved_by_execution")), [
                 "" if (valve_open or bool(zone.get("reserved_by_execution"))) else "valve_not_open",
             ]),
+            "pump_on": guard(online and not pump_on and not blocking_lock_reasons and not zone.get("blocked") and (valve_open or bool(zone.get("reserved_by_execution"))), [
+                "" if online else "device_offline",
+                "" if not pump_on else "pump_already_on",
+                "" if not blocking_lock_reasons else ",".join(blocking_lock_reasons),
+                "" if not zone.get("blocked") else "zone_blocked",
+                "" if (valve_open or bool(zone.get("reserved_by_execution"))) else "pump_precondition_no_open_valve",
+            ]),
+            "pump_off": guard(pump_on, [
+                "" if pump_on else "pump_not_running",
+            ]),
             "dose_solution": guard(
                 online and not doser_active and not blocking_lock_reasons and not zone.get("blocked") and water_available,
                 [
@@ -445,12 +537,137 @@ class OperatorControlService:
                     "" if water_available else "water_level_too_low",
                 ],
             ),
+            "stop_doser": guard(doser_active, [
+                "" if doser_active else "doser_not_running",
+            ]),
         }
 
     @staticmethod
     def _telemetry_summary(telemetry: dict[str, Any]) -> dict[str, Any]:
-        keys = ("ph", "ec", "water_level")
+        keys = ("ph", "ec", "water_level", "flow_rate_ml_per_min", "pressure_kpa")
         return {key: telemetry.get(key) for key in keys if key in telemetry}
+
+    def _build_audit_event(self, audit: dict[str, Any]) -> dict[str, Any]:
+        action_type = str(audit.get("action_type") or "AUDIT")
+        payload = dict(audit.get("payload") or {})
+        zone_id = str(audit.get("zone_id") or payload.get("zone_id") or "")
+        device_id = str(audit.get("device_id") or payload.get("device_id") or "")
+        message = str(audit.get("message") or action_type.lower())
+        special_badges: list[str] = []
+
+        if action_type == "LLAMA_DECISION":
+            special_badges.append("🤖 AI")
+            reason = str(payload.get("reason") or payload.get("rationale") or message)
+            decision = str(payload.get("decision") or payload.get("decision_type") or "unknown")
+            confidence = self._format_confidence(payload.get("confidence"))
+            parts = [f"decision={decision}", f"zone={zone_id or '-'}"]
+            if confidence != "-":
+                parts.append(f"confidence={confidence}")
+            parts.append(f"reason={reason}")
+            message = " | ".join(parts)
+        elif action_type == "LLAMA_NO_ACTION":
+            special_badges.append("🤖 AI")
+            reason = str(payload.get("reason") or payload.get("rationale") or message)
+            confidence = self._format_confidence(payload.get("confidence"))
+            parts = ["decision=no_action", f"zone={zone_id or '-'}"]
+            if confidence != "-":
+                parts.append(f"confidence={confidence}")
+            parts.append(f"reason={reason}")
+            message = " | ".join(parts)
+        elif action_type == "LLAMA_FALLBACK":
+            special_badges.append("🤖 AI")
+            message = str(payload.get("reason") or "llama recommendation unavailable; backend kept control local")
+        elif action_type == "COMMAND_REJECTED":
+            special_badges.append("🛡️ BLOCKED")
+            reasons = payload.get("reasons") or []
+            if isinstance(reasons, list) and reasons:
+                message = f"{message} | reasons={', '.join(str(item) for item in reasons)}"
+            elif reasons:
+                message = f"{message} | reasons={reasons}"
+
+        return {
+            "event_id": str(audit.get("audit_id") or f"audit-{uuid.uuid4().hex[:8]}"),
+            "source": "audit",
+            "timestamp_ms": int(audit.get("created_at_ms") or 0),
+            "type": action_type,
+            "level": self._classify_event_level(action_type=action_type, payload=payload),
+            "device_id": device_id,
+            "zone_id": zone_id,
+            "target": self._event_target(zone_id, device_id),
+            "message": message,
+            "special_badges": special_badges,
+            "payload": self._plain(payload),
+        }
+
+    def _build_alarm_event(self, alarm: dict[str, Any]) -> dict[str, Any]:
+        severity = str(alarm.get("severity") or "warning")
+        category = str(alarm.get("category") or "alarm")
+        payload = dict(alarm.get("details") or {})
+        return {
+            "event_id": str(alarm.get("alarm_id") or f"alarm-{uuid.uuid4().hex[:8]}"),
+            "source": "alarm",
+            "timestamp_ms": int(alarm.get("created_at_ms") or 0),
+            "type": f"ALARM:{category}",
+            "level": self._alarm_level(severity),
+            "device_id": str(alarm.get("device_id") or ""),
+            "zone_id": str(alarm.get("zone_id") or ""),
+            "target": self._event_target(str(alarm.get("zone_id") or ""), str(alarm.get("device_id") or "")),
+            "message": str(alarm.get("message") or category),
+            "special_badges": ["ACTIVE" if alarm.get("active") else "CLEARED", severity.upper()],
+            "payload": self._plain(payload),
+        }
+
+    @staticmethod
+    def _event_target(zone_id: str, device_id: str) -> str:
+        if zone_id and device_id:
+            return f"{zone_id} / {device_id}"
+        return zone_id or device_id or "system"
+
+    @staticmethod
+    def _format_confidence(value: Any) -> str:
+        try:
+            return f"{float(value):.2f}"
+        except (TypeError, ValueError):
+            return "-"
+
+    def _classify_event_level(self, action_type: str, payload: dict[str, Any]) -> str:
+        normalized = action_type.upper()
+        if normalized.startswith("LLAMA_"):
+            return "warn"
+        if any(token in normalized for token in ("ERROR", "FAILED", "ABORT", "REJECTED", "TIMEOUT", "EMERGENCY", "OFFLINE")):
+            return "bad"
+        if normalized in {"COMMAND_COMPLETED", "COMMAND_ACK", "COMMAND_RESULT", "COMMAND_PUBLISH", "COMMAND_PLANNED", "ZONE_RESERVED", "MANUAL_ACTION_SUBMITTED", "SYSTEM_MODE_CHANGED"}:
+            status = str(payload.get("status") or "").lower()
+            if status in {"failed", "expired", "rejected", "aborted"}:
+                return "bad"
+            return "good"
+        if normalized == "SECURITY_ALARM":
+            return "bad"
+        return "warn"
+
+    @staticmethod
+    def _alarm_level(severity: str) -> str:
+        normalized = severity.lower()
+        if normalized in {"critical", "emergency"}:
+            return "bad"
+        if normalized in {"warning"}:
+            return "warn"
+        return "good"
+
+    def _resolve_system_mode(self, payload: dict[str, Any]) -> str:
+        if "manual_mode" in payload:
+            return "manual" if bool(payload.get("manual_mode")) else "auto"
+        raw_mode = str(payload.get("mode") or payload.get("system_mode") or "").strip().lower()
+        if raw_mode in {"auto", "automatic", "automation", "enabled"}:
+            return "auto"
+        if raw_mode in {"manual", "disabled", "paused"}:
+            return "manual"
+        raise ValueError("unsupported_system_mode")
+
+    @staticmethod
+    def _system_mode_from_flags(flags: dict[str, Any]) -> str:
+        automation_enabled = bool((flags.get("automation_enabled") or {}).get("enabled", True))
+        return "auto" if automation_enabled else "manual"
 
     @classmethod
     def _plain(cls, value: Any) -> Any:
@@ -467,3 +684,14 @@ class OperatorControlService:
     @staticmethod
     def _now_ms() -> int:
         return int(time.time() * 1000)
+
+
+
+
+
+
+
+
+
+
+

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
@@ -223,10 +223,17 @@ class IngestionService:
         self._state_store.write_telemetry_snapshot(message)
         self._security_monitor.process_telemetry(message)
         self._dispatcher.observe_telemetry(message)
+        if not self._automation_enabled():
+            log.info("automation paused; skipping automated decision zone_id=%s trace_id=%s", message.zone_id, message.trace_id)
+            return
         proposal = self._decision_engine.evaluate_telemetry(message)
         if proposal is not None:
             self._dispatcher.dispatch_proposal(proposal)
         log.info("ingest receive telemetry device_id=%s zone_id=%s trace_id=%s", message.device_id, message.zone_id, message.trace_id)
+
+    def _automation_enabled(self) -> bool:
+        flags = self._state_store.get_automation_flags()
+        return bool((flags.get("automation_enabled") or {}).get("enabled", True))
 
     def _handle_device_connectivity(self, device_id: str, zone_id: str, connectivity: DeviceConnectivity, trace_id: str) -> None:
         if connectivity in {DeviceConnectivity.OFFLINE, DeviceConnectivity.SAFE_MODE}:
@@ -237,3 +244,4 @@ class IngestionService:
             return
         self._state_store.clear_device_fault(device_id)
         self._security_monitor.device_seen(device_id, zone_id, trace_id)
+

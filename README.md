@@ -1,4 +1,4 @@
-# Greenhouse Backend Execution Architecture
+﻿# Greenhouse Backend Execution Architecture
 
 This repository now targets a backend-centric greenhouse runtime with a strict execution safety boundary.
 
@@ -45,7 +45,7 @@ Architecture notes:
 - `backend/operator/service.py`
   - operator-facing safe control service
 - `backend/operator/web.py`
-  - runtime-hosted HTTP server for the operator UI
+  - runtime-hosted HTTP server for the operator UI and event log API
 - `integrations/llama/client.py`
   - local Llama API adapter
 - `integrations/openclaw_mcp/tools.py`
@@ -147,6 +147,11 @@ It is not used for command state, safety locks, leases, alarms, or execution rec
 
 See `.env.example`.
 
+Deployment split:
+
+- Local simulator + backend: [deployment.md](/V:/work/DIPLOM/testMoskitto/docs/deployment.md)
+- ESP32 firmware contract checklist: [esp32_firmware_checklist.md](/V:/work/DIPLOM/testMoskitto/docs/esp32_firmware_checklist.md)
+
 Key variables:
 
 - `STATE_STORE_BACKEND=sqlite|memory`
@@ -181,35 +186,11 @@ OpenClaw MCP notes: [openclaw_mcp.md](/V:/work/DIPLOM/testMoskitto/docs/openclaw
 
 ## Testing
 
-Layered backend tests live under `tests/`:
-
-- `test_backend_unit.py`
-- `test_backend_integration.py`
-- `test_backend_ai_flow.py`
-- `test_backend_operator_flow.py`
-- `test_backend_architecture.py`
-- `test_architecture_cleanup.py`
-- `test_operator_ui_service.py`
-- `test_openclaw_mcp.py`
-
-Reusable test fixtures and the in-memory backend harness live in `tests/fixtures.py` and `tests/harness.py`.
-
-Run the CI-friendly entrypoint:
-
-```powershell
-.\venv\Scripts\python.exe .\run_backend_tests.py
-```
-
-Or standard discovery:
-
-```powershell
-.\venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
-```
-
-Additional notes: [testing.md](/V:/work/DIPLOM/testMoskitto/docs/testing.md)
+Tests removed. Use `sim_esp32.py` for local testing.
 
 ## Migration notes
 
 - Old `PostgreSQL`/`sqlite_compat` assumptions are removed from the runtime path.
 - Old bridge-era runtime modules and prompts have been removed.
 - If older tooling still expects direct actuator dispatch, route it through `BackendToolService.execute_manual_action()` or the dispatcher facade instead.
+

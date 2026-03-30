@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
@@ -68,8 +68,10 @@ class StateStore(Protocol):
     def set_automation_flag(self, flag: AutomationFlagRecord) -> dict[str, Any]: ...
     def get_automation_flags(self) -> dict[str, dict[str, Any]]: ...
     def get_active_alarms(self) -> list[dict[str, Any]]: ...
+    def get_recent_alarms(self, limit: int = 200, include_inactive: bool = True) -> list[dict[str, Any]]: ...
     def record_alarm(self, alert: AlertEvent) -> dict[str, Any]: ...
     def clear_alarm(self, alarm_id: str, cleared_at_ms: int | None = None) -> dict[str, Any] | None: ...
+    def get_audit_logs(self, limit: int = 200) -> list[dict[str, Any]]: ...
     def append_audit_log(self, audit: AuditLogRecord) -> dict[str, Any]: ...
     def note_incident(self, category: str, payload: dict[str, Any]) -> None: ...
     def count_active_irrigation_executions(self) -> int: ...
@@ -365,6 +367,14 @@ class MemoryStateStore:
         active = [alarm for alarm in self._alarms.values() if alarm.get("active")]
         return deepcopy(sorted(active, key=lambda item: item["created_at_ms"], reverse=True))
 
+    def get_recent_alarms(self, limit: int = 200, include_inactive: bool = True) -> list[dict[str, Any]]:
+        alarms = list(self._alarms.values())
+        if not include_inactive:
+            alarms = [alarm for alarm in alarms if alarm.get("active")]
+        alarms.sort(key=lambda item: int(item.get("created_at_ms") or 0), reverse=True)
+        bounded_limit = max(1, min(limit, 1000))
+        return deepcopy(alarms[:bounded_limit])
+
     def record_alarm(self, alert: AlertEvent) -> dict[str, Any]:
         record = AlarmRecord(
             alarm_id=alert.alert_id,
@@ -394,6 +404,11 @@ class MemoryStateStore:
         self._audit_logs.append(record)
         self._audit_logs = self._audit_logs[-5000:]
         return deepcopy(record)
+
+    def get_audit_logs(self, limit: int = 200) -> list[dict[str, Any]]:
+        bounded_limit = max(1, min(limit, 5000))
+        logs = sorted(self._audit_logs, key=lambda item: int(item.get("created_at_ms") or 0), reverse=True)
+        return deepcopy(logs[:bounded_limit])
 
     def note_incident(self, category: str, payload: dict[str, Any]) -> None:
         self.append_audit_log(
@@ -682,3 +697,4 @@ def build_state_store(config: SqliteConfig, backend: str = "sqlite") -> StateSto
     if backend == "memory":
         return MemoryStateStore()
     return SQLiteStateStore(config)
+

@@ -1,10 +1,12 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
+import time
 import uuid
 
 from backend.config import BackendConfig
 from backend.decision_engine.context_builder import DecisionContextBuilder
+from backend.domain.models import AuditLogRecord
 from backend.safety.validator import ActionProposal
 from backend.state.influx import TelemetryHistoryStore
 from backend.state.store import StateStore
@@ -32,6 +34,7 @@ class DecisionEngine:
 
         llm_request = self._context_builder.build(message)
         response = self._llama.recommend(llm_request)
+        self._record_llama_audit(message, response)
         if response is None or response.decision == "no_action":
             return None
         return self._proposal_from_llm(message, response)
@@ -66,11 +69,47 @@ class DecisionEngine:
             },
         )
 
+    def _record_llama_audit(self, message: TelemetryMessage, response: LlmDecisionResponse | None) -> None:
+        created_at_ms = int(time.time() * 1000)
+        if response is None:
+            self._store.append_audit_log(
+                AuditLogRecord(
+                    audit_id=f"audit-{uuid.uuid4().hex[:12]}",
+                    trace_id=message.trace_id,
+                    action_type="LLAMA_FALLBACK",
+                    message="llama recommendation unavailable",
+                    created_at_ms=created_at_ms,
+                    device_id=message.device_id,
+                    zone_id=message.zone_id,
+                    payload={
+                        "decision": "fallback",
+                        "reason": "llama returned no recommendation",
+                    },
+                )
+            )
+            return
+
+        payload = response.model_dump()
+        payload["reason"] = response.rationale
+        action_type = "LLAMA_NO_ACTION" if response.decision == "no_action" else "LLAMA_DECISION"
+        self._store.append_audit_log(
+            AuditLogRecord(
+                audit_id=f"audit-{uuid.uuid4().hex[:12]}",
+                trace_id=message.trace_id,
+                action_type=action_type,
+                message=response.rationale,
+                created_at_ms=created_at_ms,
+                device_id=message.device_id,
+                zone_id=response.zone_id,
+                payload=payload,
+            )
+        )
+
     def _deterministic_rule(self, message: TelemetryMessage, zone_state: dict) -> ActionProposal | None:
         telemetry = message.sensors
         water_level = telemetry.get("water_level")
         if isinstance(water_level, (int, float)) and float(water_level) <= 10.0:
-            self._record_alert(message, "critical", "water_level", "Низкий уровень воды в линии питания")
+            self._record_alert(message, "critical", "water_level", "Low water level detected in the feed line")
             if zone_state.get("device_state", {}).get("valve_open"):
                 return ActionProposal(
                     message.trace_id,

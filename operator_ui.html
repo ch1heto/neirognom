@@ -1,25 +1,28 @@
-<!doctype html>
-<html lang="ru">
+﻿<!doctype html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Пульт оператора гидропоники</title>
+  <title>Greenhouse Operator Dashboard</title>
   <style>
     :root {
-      --bg: #eef3ef;
-      --panel: #fbfdfb;
-      --line: #c7d1ca;
-      --text: #17211a;
-      --muted: #5d6b60;
-      --accent: #21523b;
+      --bg: #edf2ea;
+      --panel: #fcfdfb;
+      --line: #c4d0c5;
+      --text: #162119;
+      --muted: #5f6f62;
+      --accent: #1e5a3c;
       --warn: #9a6706;
       --bad: #b42318;
       --good: #027a48;
+      --chip: #f3f5f1;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: var(--bg);
+      background:
+        radial-gradient(circle at top right, rgba(30, 90, 60, 0.12), transparent 26%),
+        linear-gradient(180deg, #f6faf6 0%, var(--bg) 100%);
       color: var(--text);
       font: 14px/1.45 Consolas, "Courier New", monospace;
     }
@@ -28,32 +31,103 @@
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 14px;
       padding: 14px;
-      box-shadow: 0 10px 24px rgba(16, 24, 18, 0.06);
+      box-shadow: 0 12px 30px rgba(17, 24, 18, 0.06);
     }
+    .toolbar, .row, .operator-form, .actions, .tabs, .event-head, .mode-line { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .toolbar { justify-content: space-between; }
+    .summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+    .card, .zone-card, .device-card, .command-card, .event-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      padding: 12px;
+    }
+    .list { display: grid; gap: 10px; max-height: 62vh; overflow: auto; }
+    .event-list { max-height: 72vh; }
     h1, h2, p { margin: 0; }
     h1 { font-size: 20px; }
     h2 { font-size: 15px; margin-bottom: 10px; }
-    .row, .toolbar, .operator-form, .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-    .toolbar { justify-content: space-between; }
     .tiny { font-size: 12px; color: var(--muted); }
-    .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-    .card, .zone-card, .device-card, .command-card { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 12px; }
     .metric { font-size: 22px; font-weight: 700; margin-top: 6px; }
-    .list { display: grid; gap: 10px; max-height: 65vh; overflow: auto; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; margin-right: 6px; margin-bottom: 4px; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--chip);
+      font-size: 12px;
+      margin-right: 6px;
+      margin-bottom: 4px;
+    }
     .ok { color: var(--good); border-color: rgba(2, 122, 72, 0.3); }
     .warn { color: var(--warn); border-color: rgba(154, 103, 6, 0.3); }
     .bad { color: var(--bad); border-color: rgba(180, 35, 24, 0.3); }
+    .type-badge.ok, .event-card.ok { background: rgba(2, 122, 72, 0.06); }
+    .type-badge.warn, .event-card.warn { background: rgba(154, 103, 6, 0.07); }
+    .type-badge.bad, .event-card.bad { background: rgba(180, 35, 24, 0.06); }
     button, input { font: inherit; }
-    input { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: #fff; min-width: 120px; }
-    button { border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; background: var(--accent); color: #fff; cursor: pointer; }
+    input {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: #fff;
+      min-width: 120px;
+    }
+    button {
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+    }
     button.secondary { background: #fff; color: var(--text); border-color: var(--line); }
     button.danger { background: var(--bad); border-color: var(--bad); }
+    button.active-tab { background: var(--text); border-color: var(--text); }
     button:disabled { opacity: 0.45; cursor: not-allowed; }
-    .rejection { color: var(--bad); margin-top: 8px; }
-    @media (max-width: 1100px) { .grid, .summary { grid-template-columns: 1fr; } }
+    .hidden { display: none; }
+    .rejection { color: var(--bad); margin-top: 8px; min-height: 18px; }
+    .target { font-weight: 700; }
+    .event-message { margin-top: 6px; word-break: break-word; }
+    .switch {
+      position: relative;
+      width: 58px;
+      height: 32px;
+      border-radius: 999px;
+      background: #d7e0d8;
+      border: 1px solid var(--line);
+      cursor: pointer;
+      appearance: none;
+    }
+    .switch::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 2px 6px rgba(16, 24, 18, 0.18);
+      transition: transform 0.15s ease;
+    }
+    .switch:checked { background: rgba(180, 35, 24, 0.18); }
+    .switch:checked::after { transform: translateX(25px); }
+    .mode-pill {
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--chip);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .mode-pill.manual { color: var(--bad); border-color: rgba(180, 35, 24, 0.3); }
+    .mode-pill.auto { color: var(--good); border-color: rgba(2, 122, 72, 0.3); }
+    @media (max-width: 1100px) {
+      .grid, .summary { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -61,60 +135,98 @@
     <section class="panel">
       <div class="toolbar">
         <div>
-          <h1>Пульт оператора гидропонной системы</h1>
-          <p class="tiny">Все ручные действия проходят через backend validation, safety и MQTT dispatch.</p>
+          <h1>Greenhouse Operator Dashboard</h1>
+          <p class="tiny">Every manual command still flows through backend safety validation and MQTT dispatch.</p>
         </div>
         <div class="row">
-          <button id="refreshBtn" class="secondary" type="button">Обновить</button>
-          <button id="emergencyBtn" class="danger" type="button">Аварийная остановка</button>
+          <button id="refreshBtn" class="secondary" type="button">Refresh</button>
+          <button id="exportBtn" class="secondary" type="button">Export CSV</button>
+          <button id="emergencyBtn" class="danger" type="button">Emergency Stop</button>
         </div>
       </div>
       <div class="operator-form" style="margin-top:12px">
         <input id="operatorId" placeholder="operator_id" value="operator_ui">
-        <input id="operatorName" placeholder="operator_name" value="Оператор">
+        <input id="operatorName" placeholder="operator_name" value="Operator">
         <input id="defaultDuration" type="number" min="1" max="15" value="5">
-        <div class="tiny">Секунды по умолчанию для открытия клапана и дозирования раствора</div>
+        <div class="tiny">Default seconds for valve open, pump on, and nutrient dosing.</div>
+      </div>
+      <div class="mode-line" style="margin-top:12px">
+        <strong>System Mode</strong>
+        <span id="systemModePill" class="mode-pill auto">AUTO</span>
+        <label class="row" for="manualModeToggle">
+          <span class="tiny">Auto</span>
+          <input id="manualModeToggle" class="switch" type="checkbox" aria-label="Toggle manual mode">
+          <span class="tiny">Manual</span>
+        </label>
+        <span class="tiny">Manual mode pauses automated telemetry-driven decisions. Manual commands still require SafetyValidator approval.</span>
       </div>
       <div class="summary" style="margin-top:14px">
-        <div class="card"><div class="tiny">Устройства</div><div id="deviceCount" class="metric">-</div></div>
-        <div class="card"><div class="tiny">Поддоны</div><div id="zoneCount" class="metric">-</div></div>
-        <div class="card"><div class="tiny">Активные блокировки</div><div id="lockCount" class="metric">-</div></div>
-        <div class="card"><div class="tiny">Активные команды</div><div id="commandCount" class="metric">-</div></div>
+        <div class="card"><div class="tiny">Devices</div><div id="deviceCount" class="metric">-</div></div>
+        <div class="card"><div class="tiny">Zones</div><div id="zoneCount" class="metric">-</div></div>
+        <div class="card"><div class="tiny">Active Locks</div><div id="lockCount" class="metric">-</div></div>
+        <div class="card"><div class="tiny">Active Commands</div><div id="commandCount" class="metric">-</div></div>
+        <div class="card"><div class="tiny">Visible Events</div><div id="eventCount" class="metric">-</div></div>
       </div>
-      <div id="statusLine" class="tiny" style="margin-top:12px">Обновлено: -</div>
+      <div id="statusLine" class="tiny" style="margin-top:12px">Updated: -</div>
+      <div class="tabs" style="margin-top:12px">
+        <button id="tabDashboard" class="secondary active-tab" type="button" data-tab="dashboard">Dashboard</button>
+        <button id="tabEventLog" class="secondary" type="button" data-tab="event-log">Event Log</button>
+      </div>
     </section>
 
-    <div class="grid">
-      <section class="panel">
-        <h2>Поддоны</h2>
-        <div id="zones" class="list"></div>
-      </section>
-      <section class="panel">
-        <h2>Устройства</h2>
-        <div id="devices" class="list"></div>
-      </section>
-    </div>
+    <section id="dashboardTab" class="tab-panel">
+      <div class="grid">
+        <section class="panel">
+          <h2>Zones</h2>
+          <div id="zones" class="list"></div>
+        </section>
+        <section class="panel">
+          <h2>Devices</h2>
+          <div id="devices" class="list"></div>
+        </section>
+      </div>
 
-    <div class="grid">
-      <section class="panel">
-        <h2>Safety / блокировки</h2>
-        <div id="locks" class="list"></div>
-      </section>
-      <section class="panel">
-        <h2>История команд</h2>
-        <div id="commands" class="list"></div>
-      </section>
-    </div>
+      <div class="grid">
+        <section class="panel">
+          <h2>Safety Locks</h2>
+          <div id="locks" class="list"></div>
+        </section>
+        <section class="panel">
+          <h2>Command History</h2>
+          <div id="commands" class="list"></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="eventLogTab" class="panel tab-panel hidden">
+      <div class="event-head" style="justify-content:space-between">
+        <div>
+          <h2>Event Log</h2>
+          <div class="tiny">Live feed of recent backend audit entries and alarms. Newest entries appear first.</div>
+        </div>
+        <div class="tiny">Auto-refresh: 2s</div>
+      </div>
+      <div id="eventFeed" class="list event-list" style="margin-top:12px"></div>
+    </section>
   </div>
 
   <script>
-    const fmtTs = (ts) => ts ? new Date(Number(ts)).toLocaleString() : "-";
     const el = (id) => document.getElementById(id);
+    const activatingActions = new Set(["open_valve", "pump_on", "dose_solution"]);
+    const appState = {
+      systemMode: "auto",
+      visibleEvents: [],
+      activeTab: "dashboard",
+      syncingMode: false,
+    };
+
+    const fmtTs = (ts) => ts ? new Date(Number(ts)).toLocaleString() : "-";
+    const csvEscape = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
 
     function operatorMeta() {
       return {
         operator_id: el("operatorId").value.trim() || "operator_ui",
-        operator_name: el("operatorName").value.trim() || "Оператор",
+        operator_name: el("operatorName").value.trim() || "Operator",
       };
     }
 
@@ -123,10 +235,16 @@
       return Number.isFinite(raw) ? Math.max(1, raw) : 5;
     }
 
-    function statusClass(value) {
+    function commandStatusClass(value) {
       const normalized = String(value || "").toLowerCase();
-      if (["online", "completed", "acked", "executing", "running"].includes(normalized)) return "ok";
-      if (["offline", "failed", "aborted", "expired"].includes(normalized)) return "bad";
+      if (["online", "completed", "acked", "executing", "running", "ok"].includes(normalized)) return "ok";
+      if (["offline", "failed", "aborted", "expired", "error"].includes(normalized)) return "bad";
+      return "warn";
+    }
+
+    function eventLevelClass(level) {
+      if (level === "good") return "ok";
+      if (level === "bad") return "bad";
       return "warn";
     }
 
@@ -136,12 +254,42 @@
         headers: { "Content-Type": "application/json" },
         ...options,
       });
-      return res.json();
+      const payload = await res.json();
+      if (!res.ok) {
+        throw new Error(payload.error || `request_failed:${res.status}`);
+      }
+      return payload;
     }
 
     async function postAction(body, confirmText = "") {
       if (confirmText && !window.confirm(confirmText)) return null;
-      return api("/api/operator/command", { method: "POST", body: JSON.stringify(body) });
+      return api("/api/operator/manual-command", { method: "POST", body: JSON.stringify(body) });
+    }
+
+    function setSystemMode(mode) {
+      appState.systemMode = mode === "manual" ? "manual" : "auto";
+      el("manualModeToggle").checked = appState.systemMode === "manual";
+      el("systemModePill").textContent = appState.systemMode.toUpperCase();
+      el("systemModePill").className = `mode-pill ${appState.systemMode}`;
+    }
+
+    function actionButtons(zone) {
+      if (appState.systemMode !== "manual") {
+        return '<div class="tiny">Switch the system to Manual mode to send direct actuator test commands.</div>';
+      }
+      const actions = [
+        ["open_valve", "Open Valve"],
+        ["close_valve", "Close Valve"],
+        ["pump_on", "Pump ON"],
+        ["pump_off", "Pump OFF"],
+        ["dose_solution", "Dose Nutrient"],
+        ["stop_doser", "Stop Doser"],
+      ];
+      return actions.map(([action, label]) => {
+        const guard = zone.actions?.[action] || { enabled: true, reasons: [] };
+        const reasons = (guard.reasons || []).filter(Boolean);
+        return `<button type="button" data-zone="${zone.zone_id}" data-device="${zone.device_id}" data-action="${action}" ${guard.enabled ? "" : "disabled"} title="${reasons.join('; ')}">${label}</button>`;
+      }).join("");
     }
 
     function renderZone(zone) {
@@ -152,27 +300,21 @@
       const last = zone.last_command;
       const locks = zone.safety_locks || [];
       const valveOpen = Boolean(zone.device_state?.valve_open);
-      const buttons = [
-        ["open_valve", "Открыть клапан"],
-        ["close_valve", "Закрыть клапан"],
-        ["dose_solution", "Дозировать раствор"],
-      ].map(([action, label]) => {
-        const guard = zone.actions?.[action] || { enabled: true, reasons: [] };
-        const reasons = (guard.reasons || []).filter(Boolean);
-        return `<button type="button" data-zone="${zone.zone_id}" data-device="${zone.device_id}" data-action="${action}" ${guard.enabled ? "" : "disabled"} title="${reasons.join("; ")}">${label}</button>`;
-      }).join("");
+      const pumpOn = Boolean(zone.device_state?.pump_on);
+      const doserActive = Boolean(zone.device_state?.doser_active);
       host.innerHTML = `
         <div class="row" style="justify-content:space-between">
           <strong>${zone.zone_id}</strong>
-          <span class="badge ${statusClass(zone.connectivity)}">${zone.connectivity || "unknown"}</span>
+          <span class="badge ${commandStatusClass(zone.connectivity)}">${zone.connectivity || "unknown"}</span>
         </div>
         <div class="tiny">device=${zone.device_id || "-"} blocked=${String(zone.blocked)} reserved=${zone.reserved_by_execution || "-"}</div>
-        <div class="tiny">pH=${telemetry.ph ?? "-"} | EC=${telemetry.ec ?? "-"} | water_level=${telemetry.water_level ?? "-"}</div>
-        <div class="tiny">клапан=${valveOpen ? "открыт" : "закрыт"} | активная команда=${active ? `${active.command_id}:${active.lifecycle}` : "-"}</div>
-        <div class="tiny">последняя команда=${last ? `${last.command_id}:${last.lifecycle}` : "-"}</div>
+        <div class="tiny">pH=${telemetry.ph ?? "-"} | EC=${telemetry.ec ?? "-"} | water_level=${telemetry.water_level ?? "-"} | flow=${telemetry.flow_rate_ml_per_min ?? "-"}</div>
+        <div class="tiny">valve_open=${String(valveOpen)} | pump_on=${String(pumpOn)} | doser_active=${String(doserActive)}</div>
+        <div class="tiny">active_command=${active ? `${active.command_id}:${active.lifecycle}` : "-"}</div>
+        <div class="tiny">last_command=${last ? `${last.command_id}:${last.lifecycle}` : "-"}</div>
         <div class="tiny">ACK=${active?.last_ack?.status || last?.last_ack?.status || "-"} | RESULT=${active?.last_result?.status || last?.last_result?.status || "-"}</div>
-        <div class="tiny">блокировки: ${(locks.map(lock => lock.kind).join(", ")) || "-"}</div>
-        <div class="actions" style="margin-top:10px">${buttons}</div>
+        <div class="tiny">locks: ${(locks.map(lock => lock.kind).join(', ')) || "-"}</div>
+        <div class="actions" style="margin-top:10px">${actionButtons(zone)}</div>
         <div class="rejection" data-rejection="${zone.zone_id}"></div>
       `;
       return host;
@@ -186,12 +328,12 @@
       host.innerHTML = `
         <div class="row" style="justify-content:space-between">
           <strong>${device.device_id}</strong>
-          <span class="badge ${statusClass(device.connectivity)}">${device.connectivity || "unknown"}</span>
+          <span class="badge ${commandStatusClass(device.connectivity)}">${device.connectivity || "unknown"}</span>
         </div>
-        <div class="tiny">tray=${device.zone_id || "-"} last_seen=${fmtTs(device.last_seen_ms)}</div>
+        <div class="tiny">zone=${device.zone_id || "-"} last_seen=${fmtTs(device.last_seen_ms)}</div>
         <div class="tiny">firmware=${device.firmware_version || "-"}</div>
         <div class="tiny">pH=${telemetry.ph ?? "-"} | EC=${telemetry.ec ?? "-"} | water_level=${telemetry.water_level ?? "-"}</div>
-        <div class="tiny">state: valve_open=${String(state.valve_open ?? false)} doser_active=${String(state.doser_active ?? false)}</div>
+        <div class="tiny">state: valve_open=${String(state.valve_open ?? false)} pump_on=${String(state.pump_on ?? false)} doser_active=${String(state.doser_active ?? false)}</div>
         <div class="tiny">active_command=${device.active_command ? `${device.active_command.command_id}:${device.active_command.lifecycle}` : "-"}</div>
       `;
       return host;
@@ -203,7 +345,7 @@
       host.innerHTML = `
         <div class="row" style="justify-content:space-between">
           <strong>${lock.kind}</strong>
-          <span class="badge ${statusClass(lock.active ? "warn" : "completed")}">${lock.scope}:${lock.scope_id}</span>
+          <span class="badge ${commandStatusClass(lock.active ? "warning" : "completed")}">${lock.scope}:${lock.scope_id}</span>
         </div>
         <div class="tiny">reason=${lock.reason}</div>
         <div class="tiny">owner=${lock.owner || "-"} created=${fmtTs(lock.created_at_ms)}</div>
@@ -217,27 +359,48 @@
       host.innerHTML = `
         <div class="row" style="justify-content:space-between">
           <strong>${command.command_id}</strong>
-          <span class="badge ${statusClass(command.lifecycle)}">${command.lifecycle}</span>
+          <span class="badge ${commandStatusClass(command.lifecycle)}">${command.lifecycle}</span>
         </div>
-        <div class="tiny">tray=${command.zone_id} device=${command.device_id} by=${command.operator?.operator_name || command.requested_by}</div>
+        <div class="tiny">zone=${command.zone_id} device=${command.device_id} by=${command.operator?.operator_name || command.requested_by}</div>
         <div class="tiny">reason=${command.reason || "-"}</div>
         <div class="tiny">ack=${command.last_ack?.status || "-"} result=${command.last_result?.status || "-"} error=${command.last_error || "-"}</div>
       `;
       return host;
     }
 
-    async function refresh() {
+    function renderEvent(event) {
+      const host = document.createElement("div");
+      const levelClass = eventLevelClass(event.level);
+      host.className = `event-card ${levelClass}`;
+      const extraBadges = (event.special_badges || []).map(badge => `<span class="badge ${levelClass}">${badge}</span>`).join("");
+      host.innerHTML = `
+        <div class="row" style="justify-content:space-between; align-items:flex-start">
+          <div>
+            <div class="tiny">${fmtTs(event.timestamp_ms)}</div>
+            <div class="target">${event.target || "system"}</div>
+          </div>
+          <div>
+            <span class="badge type-badge ${levelClass}">${event.type}</span>
+            ${extraBadges}
+          </div>
+        </div>
+        <div class="event-message">${event.message || "-"}</div>
+      `;
+      return host;
+    }
+
+    async function refreshOverview() {
       const overview = await api("/api/operator/overview");
       const devices = overview.devices || [];
       const zones = overview.zones || [];
       const state = overview.state || {};
       const commands = overview.command_history || [];
-
+      setSystemMode(overview.system_mode || state.system_mode || "auto");
       el("deviceCount").textContent = String(devices.length);
       el("zoneCount").textContent = String(zones.length);
       el("lockCount").textContent = String((state.active_safety_locks || []).length);
       el("commandCount").textContent = String((state.active_commands || []).length);
-      el("statusLine").textContent = `Обновлено: ${fmtTs(overview.generated_at_ms)}`;
+      el("statusLine").textContent = `Updated: ${fmtTs(overview.generated_at_ms)}`;
 
       const zoneHost = el("zones");
       zoneHost.innerHTML = "";
@@ -250,12 +413,50 @@
       const lockHost = el("locks");
       lockHost.innerHTML = "";
       (state.active_safety_locks || []).forEach(lock => lockHost.appendChild(renderLock(lock)));
-      if (!(state.active_safety_locks || []).length) lockHost.innerHTML = '<div class="tiny">Нет активных блокировок.</div>';
+      if (!(state.active_safety_locks || []).length) lockHost.innerHTML = '<div class="tiny">No active safety locks.</div>';
 
       const commandHost = el("commands");
       commandHost.innerHTML = "";
       commands.forEach(command => commandHost.appendChild(renderCommand(command)));
-      if (!commands.length) commandHost.innerHTML = '<div class="tiny">История команд пока пуста.</div>';
+      if (!commands.length) commandHost.innerHTML = '<div class="tiny">Command history is empty.</div>';
+    }
+
+    async function refreshEventLog() {
+      const payload = await api("/api/operator/event-log?limit=200");
+      appState.visibleEvents = payload.events || [];
+      el("eventCount").textContent = String(appState.visibleEvents.length);
+      const feed = el("eventFeed");
+      feed.innerHTML = "";
+      appState.visibleEvents.forEach(event => feed.appendChild(renderEvent(event)));
+      if (!appState.visibleEvents.length) {
+        feed.innerHTML = '<div class="tiny">No events yet.</div>';
+      }
+    }
+
+    async function refreshAll() {
+      try {
+        await Promise.all([refreshOverview(), refreshEventLog()]);
+      } catch (error) {
+        el("statusLine").textContent = `Updated: error (${error.message})`;
+      }
+    }
+
+    async function syncSystemMode(nextMode) {
+      if (appState.syncingMode) return;
+      appState.syncingMode = true;
+      try {
+        const payload = await api("/api/operator/system-mode", {
+          method: "POST",
+          body: JSON.stringify({ ...operatorMeta(), system_mode: nextMode, reason: `operator switched to ${nextMode} mode` }),
+        });
+        setSystemMode(payload.system_mode || nextMode);
+        await refreshAll();
+      } catch (error) {
+        setSystemMode(appState.systemMode);
+        window.alert(`Mode update failed: ${error.message}`);
+      } finally {
+        appState.syncingMode = false;
+      }
     }
 
     async function handleZoneAction(button) {
@@ -267,22 +468,56 @@
         zone_id: zoneId,
         device_id: deviceId,
         ui_action: uiAction,
-        duration_sec: defaultDuration(),
+        duration_sec: activatingActions.has(uiAction) ? defaultDuration() : 0,
       };
-      const dangerous = ["open_valve", "dose_solution"].includes(uiAction);
       const actionLabels = {
-        open_valve: "открытие клапана",
-        close_valve: "закрытие клапана",
-        dose_solution: "дозирование раствора",
+        open_valve: "open valve",
+        close_valve: "close valve",
+        pump_on: "turn pump on",
+        pump_off: "turn pump off",
+        dose_solution: "dose nutrient solution",
+        stop_doser: "stop nutrient doser",
       };
-      const result = await postAction(body, dangerous ? `Подтвердить ${actionLabels[uiAction] || uiAction} для ${zoneId}?` : "");
+      const confirmText = activatingActions.has(uiAction) ? `Confirm ${actionLabels[uiAction] || uiAction} for ${zoneId}?` : "";
+      const result = await postAction(body, confirmText);
       if (!result) return;
       const rejection = document.querySelector(`[data-rejection="${zoneId}"]`);
       if (rejection) {
         const reasons = result.reasons || result.command?.last_error || result.command?.last_result?.error_message;
-        rejection.textContent = result.status === "ABORTED" ? `Отказ: ${Array.isArray(reasons) ? reasons.join(", ") : reasons || "unknown_reason"}` : "";
+        rejection.textContent = result.status === "ABORTED" ? `Blocked: ${Array.isArray(reasons) ? reasons.join(', ') : reasons || 'unknown_reason'}` : "";
       }
-      await refresh();
+      await refreshAll();
+    }
+
+    function exportEventsCsv() {
+      const rows = [
+        ["timestamp", "type", "target", "message", "level"],
+        ...appState.visibleEvents.map(event => [
+          fmtTs(event.timestamp_ms),
+          event.type || "",
+          event.target || "",
+          event.message || "",
+          event.level || "",
+        ]),
+      ];
+      const csv = rows.map(row => row.map(csvEscape).join(",")).join("\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `event-log-${new Date().toISOString().replaceAll(':', '-')}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function activateTab(name) {
+      appState.activeTab = name;
+      el("dashboardTab").classList.toggle("hidden", name !== "dashboard");
+      el("eventLogTab").classList.toggle("hidden", name !== "event-log");
+      el("tabDashboard").classList.toggle("active-tab", name === "dashboard");
+      el("tabEventLog").classList.toggle("active-tab", name === "event-log");
     }
 
     document.body.addEventListener("click", async (event) => {
@@ -290,21 +525,33 @@
       if (!(target instanceof HTMLButtonElement)) return;
       if (target.dataset.action) {
         await handleZoneAction(target);
+        return;
+      }
+      if (target.dataset.tab) {
+        activateTab(target.dataset.tab);
       }
     });
 
-    el("refreshBtn").addEventListener("click", refresh);
+    el("refreshBtn").addEventListener("click", refreshAll);
+    el("exportBtn").addEventListener("click", exportEventsCsv);
+    el("manualModeToggle").addEventListener("change", async (event) => {
+      const input = event.target;
+      if (!(input instanceof HTMLInputElement)) return;
+      const nextMode = input.checked ? "manual" : "auto";
+      await syncSystemMode(nextMode);
+    });
     el("emergencyBtn").addEventListener("click", async () => {
-      if (!window.confirm("Подтвердить аварийную остановку? Все клапаны будут закрыты, дозаторы остановлены.")) return;
+      if (!window.confirm("Confirm emergency stop? All valves will close and dosers will be stopped.")) return;
       await api("/api/operator/emergency-stop", {
         method: "POST",
-        body: JSON.stringify({ ...operatorMeta(), reason: "ручная аварийная остановка из web ui" }),
+        body: JSON.stringify({ ...operatorMeta(), reason: "manual emergency stop from operator UI" }),
       });
-      await refresh();
+      await refreshAll();
     });
 
-    refresh();
-    setInterval(refresh, 3000);
+    activateTab("dashboard");
+    refreshAll();
+    setInterval(refreshAll, 2000);
   </script>
 </body>
 </html>

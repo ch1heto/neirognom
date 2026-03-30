@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
@@ -48,48 +48,77 @@ class OperatorUiServer:
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 parsed = urlparse(self.path)
-                if parsed.path in {"/", "/operator"}:
-                    self._send_file(UI_PATH)
-                    return
-                if parsed.path == "/api/operator/overview":
-                    self._send_json(service.overview())
-                    return
-                if parsed.path == "/api/operator/devices-zones":
-                    self._send_json(service.list_devices_zones())
-                    return
-                if parsed.path == "/api/operator/state":
-                    self._send_json(service.get_control_safety_state())
-                    return
-                if parsed.path == "/api/operator/commands":
-                    params = parse_qs(parsed.query)
-                    limit = int(params.get("limit", ["50"])[0])
-                    self._send_json(service.command_history(limit=limit))
-                    return
-                self.send_error(HTTPStatus.NOT_FOUND, "not_found")
+                try:
+                    if parsed.path in {"/", "/operator"}:
+                        self._send_file(UI_PATH)
+                        return
+                    if parsed.path == "/api/operator/overview":
+                        self._send_json(service.overview())
+                        return
+                    if parsed.path == "/api/operator/devices-zones":
+                        self._send_json(service.list_devices_zones())
+                        return
+                    if parsed.path == "/api/operator/state":
+                        self._send_json(service.get_control_safety_state())
+                        return
+                    if parsed.path == "/api/operator/system-mode":
+                        self._send_json(service.get_system_mode_state())
+                        return
+                    if parsed.path == "/api/operator/event-log":
+                        params = parse_qs(parsed.query)
+                        limit = self._bounded_int(params.get("limit", ["200"])[0], default=200, minimum=1, maximum=200)
+                        self._send_json(service.get_event_log(limit=limit))
+                        return
+                    if parsed.path == "/api/operator/commands":
+                        params = parse_qs(parsed.query)
+                        limit = self._bounded_int(params.get("limit", ["50"])[0], default=50, minimum=1, maximum=200)
+                        self._send_json(service.command_history(limit=limit))
+                        return
+                    self.send_error(HTTPStatus.NOT_FOUND, "not_found")
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                except Exception:
+                    log.exception("operator GET failed path=%s", parsed.path)
+                    self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error")
 
             def do_POST(self) -> None:
                 parsed = urlparse(self.path)
-                body = self._read_json()
-                if parsed.path == "/api/operator/command":
-                    self._send_json(service.submit_manual_command(body))
-                    return
-                if parsed.path == "/api/operator/emergency-stop":
-                    self._send_json(service.emergency_stop(body))
-                    return
-                self.send_error(HTTPStatus.NOT_FOUND, "not_found")
+                try:
+                    body = self._read_json()
+                    if parsed.path in {"/api/operator/command", "/api/operator/manual-command"}:
+                        self._send_json(service.submit_manual_command(body))
+                        return
+                    if parsed.path == "/api/operator/system-mode":
+                        self._send_json(service.set_system_mode(body))
+                        return
+                    if parsed.path == "/api/operator/emergency-stop":
+                        self._send_json(service.emergency_stop(body))
+                        return
+                    self.send_error(HTTPStatus.NOT_FOUND, "not_found")
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                except Exception:
+                    log.exception("operator POST failed path=%s", parsed.path)
+                    self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error")
 
             def _read_json(self) -> dict:
                 size = int(self.headers.get("Content-Length", "0") or 0)
                 raw = self.rfile.read(size) if size > 0 else b"{}"
                 try:
                     payload = json.loads(raw.decode("utf-8"))
-                except json.JSONDecodeError:
-                    self.send_error(HTTPStatus.BAD_REQUEST, "invalid_json")
-                    return {}
+                except json.JSONDecodeError as exc:
+                    raise ValueError("invalid_json") from exc
                 if not isinstance(payload, dict):
-                    self.send_error(HTTPStatus.BAD_REQUEST, "payload_must_be_object")
-                    return {}
+                    raise ValueError("payload_must_be_object")
                 return payload
+
+            @staticmethod
+            def _bounded_int(value: str, *, default: int, minimum: int, maximum: int) -> int:
+                try:
+                    parsed = int(value)
+                except (TypeError, ValueError):
+                    return default
+                return max(minimum, min(parsed, maximum))
 
             def _send_json(self, payload: dict, status: int = HTTPStatus.OK) -> None:
                 body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
