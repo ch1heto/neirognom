@@ -162,6 +162,32 @@ Key variables:
 .\venv\Scripts\python.exe .\backend_server.py
 ```
 
+## Testing
+
+Layered backend tests live under `tests/`:
+
+- `test_backend_unit.py`
+- `test_backend_integration.py`
+- `test_backend_ai_flow.py`
+- `test_backend_operator_flow.py`
+- `test_backend_architecture.py`
+
+Reusable test fixtures and the in-memory backend harness live in `tests/fixtures.py` and `tests/harness.py`.
+
+Run the CI-friendly entrypoint:
+
+```powershell
+.\venv\Scripts\python.exe .\run_backend_tests.py
+```
+
+Or standard discovery:
+
+```powershell
+.\venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
+```
+
+Additional notes: [testing.md](/V:/work/DIPLOM/testMoskitto/docs/testing.md)
+
 Legacy entrypoint:
 
 ```powershell

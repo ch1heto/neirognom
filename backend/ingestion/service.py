@@ -43,10 +43,10 @@ class IngestionService:
 
         payload.setdefault("device_id", parsed.device_id)
         payload.setdefault("trace_id", payload.get("message_id") or f"trace-{uuid.uuid4().hex[:12]}")
-        payload.setdefault("ts_ms", int(time.time() * 1000))
 
         try:
             if parsed.channel == TELEMETRY_RAW_SUFFIX:
+                payload.setdefault("ts_ms", int(time.time() * 1000))
                 message = TelemetryMessage.model_validate(payload)
                 if self._state_store.seen_message(message.message_id):
                     self._state_store.note_incident("replay_suspected", {"topic": topic, "message_id": message.message_id, "device_id": message.device_id, "zone_id": message.zone_id, "trace_id": message.trace_id})
@@ -62,6 +62,7 @@ class IngestionService:
                 return
 
             if parsed.channel == STATE_SUFFIX:
+                payload.setdefault("ts_ms", int(time.time() * 1000))
                 message = DeviceStateMessage.model_validate(payload)
                 if self._state_store.seen_message(message.message_id):
                     self._state_store.note_incident("replay_suspected", {"topic": topic, "message_id": message.message_id, "device_id": message.device_id, "zone_id": message.zone_id, "trace_id": message.trace_id})

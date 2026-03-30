@@ -44,6 +44,7 @@ class SafetyValidator:
     def validate(self, store: StateStore, proposal: ActionProposal) -> SafetyDecision:
         reasons: list[str] = []
         zone = store.get_zone_state(proposal.zone_id)
+        device = store.get_device_state(proposal.device_id)
         current_state = store.get_current_state()
         telemetry = zone.get("telemetry", {})
         now_ms = int(proposal.requested_at_ms if proposal.requested_at_ms is not None else time.time() * 1000)
@@ -74,6 +75,11 @@ class SafetyValidator:
 
         if proposal.duration_sec > int(zone.get("max_duration_per_run_sec") or 0):
             reasons.append("duration_exceeds_zone_limit")
+
+        if proposal.action.upper() in {"START", "OPEN", "ON"}:
+            connectivity = str(device.get("connectivity") or "").lower()
+            if connectivity in {"offline", "safe_mode"}:
+                reasons.append("device_offline")
 
         last_watering_at_ms = zone.get("last_watering_at_ms")
         cooldown_sec = int(zone.get("cooldown_sec") or 0)

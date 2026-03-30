@@ -35,6 +35,17 @@ class BackendArchitectureTests(unittest.TestCase):
         config = load_backend_config()
         store = MemoryStateStore()
         store.initialize(config.zone_configs(), config.global_safety)
+        store.write_device_state(
+            DeviceStateMessage(
+                message_id="msg-state-default",
+                trace_id="trace-state-default",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                ts_ms=int(time.time() * 1000),
+                connectivity=DeviceConnectivity.ONLINE,
+                state={"pump_on": False, "valve_open": False},
+            )
+        )
         mqtt_client = DummyMqttClient()
         validator = SafetyValidator(config)
         dispatcher = CommandDispatcher(mqtt_client, config, store, validator)
