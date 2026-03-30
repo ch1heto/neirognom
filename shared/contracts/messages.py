@@ -253,6 +253,12 @@ class ActuatorCommandMessage(StrictModel):
             payload["safety_caps"] = safety_constraints
         return payload
 
+    @model_validator(mode="after")
+    def _validate_runtime_contract(self) -> "ActuatorCommandMessage":
+        if self.action.upper() in {"START", "OPEN", "ON", "DIM_50"} and self.ttl_sec <= 0:
+            raise ValueError("ttl_sec_must_be_positive_for_activating_commands")
+        return self
+
     @property
     def trace_id(self) -> str:
         return self.correlation_id
@@ -312,6 +318,12 @@ class CommandAck(StrictModel):
         payload.setdefault("status_code", str(payload.get("status_code") or payload.get("error_code") or payload.get("status") or ""))
         return payload
 
+    @model_validator(mode="after")
+    def _validate_status_fields(self) -> "CommandAck":
+        if not self.status_code:
+            raise ValueError("status_code_required")
+        return self
+
     @property
     def trace_id(self) -> str:
         return self.correlation_id
@@ -351,6 +363,12 @@ class CommandResult(StrictModel):
         payload.setdefault("source", str(payload.get("source") or "device"))
         payload.setdefault("status_code", str(payload.get("status_code") or payload.get("error_code") or payload.get("status") or ""))
         return payload
+
+    @model_validator(mode="after")
+    def _validate_status_fields(self) -> "CommandResult":
+        if not self.status_code:
+            raise ValueError("status_code_required")
+        return self
 
     @property
     def trace_id(self) -> str:

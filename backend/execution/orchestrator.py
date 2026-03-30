@@ -354,6 +354,8 @@ class IrrigationOrchestrator:
         created_at_ms = int(time.time() * 1000)
         ttl_sec = max(0, (int(command["expires_at_ms"]) - created_at_ms + 999) // 1000)
         command_source = str(command.get("metadata", {}).get("command_source") or command.get("requested_by") or "backend")
+        if action.upper() in {"START", "OPEN", "ON", "DIM_50"} and ttl_sec <= 0:
+            ttl_sec = max(1, int(command.get("metadata", {}).get("command_ttl_sec") or 1))
         message = ActuatorCommandMessage(
             message_id=f"msg-{uuid.uuid4().hex[:12]}",
             command_id=command_id,

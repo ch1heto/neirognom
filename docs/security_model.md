@@ -141,6 +141,10 @@ When detected, backend persists:
 
 See [mqtt_acl_example.txt](/V:/work/DIPLOM/testMoskitto/docs/mqtt_acl_example.txt).
 
+For the full backend-to-ESP32 practical protocol, including telemetry,
+presence, duplicate handling, safe-mode behavior, and expected device error
+codes, see [esp32_backend_protocol.md](/V:/work/DIPLOM/testMoskitto/docs/esp32_backend_protocol.md).
+
 ## Assumptions and limitations
 
 - MQTT ACLs and device authentication are broker-enforced; this repository does not provision broker credentials automatically.

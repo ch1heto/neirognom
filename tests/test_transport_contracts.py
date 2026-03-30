@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pydantic import ValidationError
 
 from mqtt.topics import (
     ACK_SUFFIX,
@@ -21,7 +22,7 @@ from mqtt.topics import (
     telemetry_topic,
     zone_telemetry_topic,
 )
-from shared.contracts.messages import ActuatorCommandMessage, CommandResult, EventEnvelope, TelemetryMessage
+from shared.contracts.messages import ActuatorCommandMessage, CommandAck, CommandResult, EventEnvelope, PresenceMessage, TelemetryMessage
 
 
 class TransportContractTests(unittest.TestCase):
@@ -140,6 +141,106 @@ class TransportContractTests(unittest.TestCase):
         self.assertEqual(command.max_duration_ms, 5_000)
         self.assertEqual(result.status_code, "completed")
         self.assertEqual(result.local_timestamp_ms, 1010)
+
+    def test_activating_command_requires_positive_ttl(self) -> None:
+        with self.assertRaises(ValidationError):
+            ActuatorCommandMessage.model_validate(
+                {
+                    "message_id": "msg-command-ttl-0001",
+                    "command_id": "cmd-command-ttl-0001",
+                    "correlation_id": "corr-command-ttl-0001",
+                    "source": "backend",
+                    "target_device_id": "esp32-1",
+                    "target_zone_id": "tray_1",
+                    "action": "OPEN",
+                    "duration_sec": 0,
+                    "ttl_sec": 0,
+                    "created_at": 1000,
+                    "safety_caps": {
+                        "local_hard_max_duration_ms": 5000,
+                        "allowed_runtime_window_ms": 5000,
+                    },
+                    "execution_id": "exec-command-ttl-0001",
+                    "actuator": "irrigation_valve",
+                    "step": "open_valve",
+                    "nonce": "nonce-command-ttl-0001",
+                }
+            )
+
+    def test_non_activating_command_allows_zero_ttl(self) -> None:
+        command = ActuatorCommandMessage.model_validate(
+            {
+                "message_id": "msg-command-stop-0001",
+                "command_id": "cmd-command-stop-0001",
+                "correlation_id": "corr-command-stop-0001",
+                "source": "backend",
+                "target_device_id": "esp32-1",
+                "target_zone_id": "tray_1",
+                "action": "OFF",
+                "duration_sec": 0,
+                "ttl_sec": 0,
+                "created_at": 1000,
+                "safety_caps": {
+                    "local_hard_max_duration_ms": 0,
+                    "allowed_runtime_window_ms": 0,
+                },
+                "execution_id": "exec-command-stop-0001",
+                "actuator": "master_pump",
+                "step": "stop_pump",
+                "nonce": "nonce-command-stop-0001",
+            }
+        )
+        self.assertEqual(command.ttl_sec, 0)
+
+    def test_presence_model_accepts_canonical_and_safe_mode_values(self) -> None:
+        presence = PresenceMessage.model_validate(
+            {
+                "message_id": "msg-presence-1001",
+                "correlation_id": "corr-presence-1001",
+                "device_id": "esp32-1",
+                "zone_id": "tray_1",
+                "timestamp": 2000,
+                "message_counter": 4,
+                "connectivity": "safe_mode",
+                "status": {"reason": "wifi_lost"},
+                "meta": {"lwt": True},
+            }
+        )
+        self.assertEqual(presence.connectivity.value, "safe_mode")
+        self.assertEqual(presence.status["reason"], "wifi_lost")
+
+    def test_ack_and_result_require_status_code(self) -> None:
+        ack = CommandAck.model_validate(
+            {
+                "message_id": "msg-ack-1001",
+                "correlation_id": "corr-ack-1001",
+                "command_id": "cmd-ack-1001",
+                "device_id": "esp32-1",
+                "zone_id": "tray_1",
+                "status": "failed",
+                "local_timestamp": 2010,
+                "observed_state": {},
+                "error_code": "stale_command",
+                "error_message": "command expired locally",
+            }
+        )
+        result = CommandResult.model_validate(
+            {
+                "message_id": "msg-result-1002",
+                "correlation_id": "corr-result-1002",
+                "command_id": "cmd-ack-1001",
+                "device_id": "esp32-1",
+                "zone_id": "tray_1",
+                "status": "failed",
+                "local_timestamp": 2020,
+                "observed_state": {},
+                "metrics": {},
+                "error_code": "execution_timeout",
+                "error_message": "pump local timeout",
+            }
+        )
+        self.assertEqual(ack.status_code, "stale_command")
+        self.assertEqual(result.status_code, "execution_timeout")
 
     def test_event_envelope_accepts_legacy_error_payload(self) -> None:
         event = EventEnvelope.model_validate(
