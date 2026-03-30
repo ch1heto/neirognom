@@ -88,7 +88,32 @@ class OperatorControlService:
 
     def submit_manual_command(self, payload: dict[str, Any]) -> dict[str, Any]:
         action = self._normalize_manual_action(payload)
-        result = self._backend_tools.execute_manual_action(action)
+        metadata = dict(action.get("metadata") or {})
+        self._state_store.append_audit_log(
+            AuditLogRecord(
+                audit_id=f"audit-{uuid.uuid4().hex[:12]}",
+                trace_id=str(action["trace_id"]),
+                action_type="MANUAL_ACTION_SUBMITTED",
+                message=str(action["reason"]),
+                created_at_ms=self._now_ms(),
+                command_id=str(action["command_id"]),
+                device_id=str(action["device_id"]),
+                zone_id=str(action["zone_id"]),
+                payload={
+                    "submitted_via": metadata.get("submitted_via"),
+                    "command_source": metadata.get("command_source"),
+                    "operator_id": metadata.get("operator_id"),
+                    "operator_name": metadata.get("operator_name"),
+                    "requested_duration_sec": metadata.get("requested_duration_sec"),
+                    "effective_duration_sec": metadata.get("effective_duration_sec"),
+                    "manual_ttl_sec": metadata.get("manual_ttl_sec"),
+                },
+            )
+        )
+        result = self._backend_tools.execute_manual_action(
+            action,
+            source=str(metadata.get("command_source") or "operator"),
+        )
         command_id = result.get("command_id")
         if command_id:
             status = self._backend_tools.get_command_status(str(command_id))
@@ -237,13 +262,18 @@ class OperatorControlService:
         duration_sec = min(max(0, requested_duration_sec), duration_cap) if duration_cap > 0 else 0
 
         metadata = dict(payload.get("metadata", {}))
-        submitted_via = str(payload.get("submitted_via") or "operator_ui")
+        submitted_via = self._normalize_submitted_via(payload.get("submitted_via"))
+        command_source = "mcp" if submitted_via == "openclaw_mcp" else "operator"
+        manual_ttl_sec = self._manual_ttl_sec(command_source)
         metadata.update(
             {
                 "operator_id": str(payload.get("operator_id") or "operator"),
                 "operator_name": str(payload.get("operator_name") or payload.get("operator_id") or "operator"),
                 "submitted_via": submitted_via,
+                "command_source": command_source,
                 "requested_duration_sec": requested_duration_sec,
+                "effective_duration_sec": duration_sec,
+                "manual_ttl_sec": manual_ttl_sec,
                 "duration_cap_sec": duration_cap,
                 "ui_action": ui_action or None,
             }
@@ -262,9 +292,28 @@ class OperatorControlService:
         }
 
     def _duration_cap(self, actuator: str, zone: dict[str, Any]) -> int:
+        global_manual_cap = max(0, int(self._config.global_safety.max_manual_duration_sec))
         if actuator == "master_pump":
-            return int(self._config.global_safety.master_pump_timeout_sec)
-        return int(zone.get("max_duration_per_run_sec") or 0)
+            base_cap = int(self._config.global_safety.master_pump_timeout_sec)
+        else:
+            base_cap = int(zone.get("max_duration_per_run_sec") or 0)
+        if global_manual_cap <= 0:
+            return base_cap
+        if base_cap <= 0:
+            return global_manual_cap
+        return min(base_cap, global_manual_cap)
+
+    @staticmethod
+    def _normalize_submitted_via(value: Any) -> str:
+        submitted_via = str(value or "operator_ui").strip().lower()
+        if submitted_via in {"openclaw_mcp", "mcp"}:
+            return "openclaw_mcp"
+        return "operator_ui"
+
+    def _manual_ttl_sec(self, command_source: str) -> int:
+        if command_source == "mcp":
+            return int(self._config.global_safety.mcp_command_ttl_sec)
+        return int(self._config.global_safety.manual_command_ttl_sec)
 
     def _sorted_commands(self) -> list[dict[str, Any]]:
         commands = self._state_store.get_current_state().get("commands", {}).values()
@@ -292,7 +341,12 @@ class OperatorControlService:
                     "operator_id": metadata.get("operator_id"),
                     "operator_name": metadata.get("operator_name"),
                     "submitted_via": metadata.get("submitted_via"),
+                    "command_source": metadata.get("command_source"),
+                    "requested_duration_sec": metadata.get("requested_duration_sec"),
+                    "effective_duration_sec": metadata.get("effective_duration_sec"),
+                    "manual_ttl_sec": metadata.get("manual_ttl_sec"),
                 },
+                "command_source": metadata.get("command_source"),
                 "execution": execution or None,
                 "last_ack": result_payload.get("last_ack"),
                 "last_result": result_payload.get("last_result"),

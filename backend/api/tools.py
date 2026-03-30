@@ -40,7 +40,14 @@ class BackendToolService:
     def propose_action(self, action: dict) -> dict:
         return {"status": "proposal_only", "action": action, "note": "use execute_manual_action to pass through backend validation and execution"}
 
-    def execute_manual_action(self, action: dict) -> dict:
+    def execute_manual_action(self, action: dict, *, source: str | None = None, origin: DecisionOrigin | str | None = None) -> dict:
+        metadata = dict(action.get("metadata", {}))
+        resolved_origin, resolved_source = self._resolve_manual_source(action, metadata, source=source, origin=origin)
+        metadata.setdefault("command_source", resolved_source)
+        if resolved_source == "mcp":
+            metadata.setdefault("submitted_via", "openclaw_mcp")
+        else:
+            metadata.setdefault("submitted_via", "operator_ui")
         proposal = ActionProposal(
             trace_id=str(action.get("trace_id") or f"trace-{int(time.time() * 1000)}"),
             device_id=str(action["device_id"]),
@@ -48,10 +55,41 @@ class BackendToolService:
             actuator=str(action["actuator"]),
             action=str(action["action"]),
             duration_sec=int(action.get("duration_sec", 0)),
-            origin=DecisionOrigin.OPERATOR,
+            origin=resolved_origin,
             reason=str(action.get("reason", "manual operator action")),
             requested_at_ms=int(action.get("requested_at_ms", int(time.time() * 1000))),
             command_id=action.get("command_id"),
-            metadata=dict(action.get("metadata", {})),
+            metadata=metadata,
         )
         return self._dispatcher.dispatch_proposal(proposal)
+
+    @staticmethod
+    def _resolve_manual_source(
+        action: dict,
+        metadata: dict,
+        *,
+        source: str | None,
+        origin: DecisionOrigin | str | None,
+    ) -> tuple[DecisionOrigin, str]:
+        if origin is not None:
+            resolved_origin = origin if isinstance(origin, DecisionOrigin) else DecisionOrigin(str(origin).lower())
+        else:
+            origin_value = action.get("origin", metadata.get("origin"))
+            if origin_value is not None:
+                resolved_origin = origin_value if isinstance(origin_value, DecisionOrigin) else DecisionOrigin(str(origin_value).lower())
+            else:
+                resolved_origin = DecisionOrigin.OPERATOR
+
+        resolved_source = str(
+            source
+            or action.get("source")
+            or metadata.get("command_source")
+            or metadata.get("submitted_via")
+            or resolved_origin.value
+        ).strip().lower() or resolved_origin.value
+
+        if resolved_source in {"openclaw_mcp", "mcp"}:
+            return DecisionOrigin.MCP, "mcp"
+        if resolved_source in {"operator_ui", "operator", "manual"}:
+            return DecisionOrigin.OPERATOR, resolved_source if resolved_source == "operator_ui" else "operator"
+        return resolved_origin, resolved_source

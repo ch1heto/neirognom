@@ -49,6 +49,7 @@ class DecisionOrigin(StrEnum):
     DETERMINISTIC = "deterministic"
     LLAMA = "llama"
     OPERATOR = "operator"
+    MCP = "mcp"
     AUTOMATION = "automation"
 
 

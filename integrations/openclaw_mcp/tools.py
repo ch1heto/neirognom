@@ -36,12 +36,14 @@ class OpenClawMcpAdapter:
         self._require_action_auth(action)
         payload = dict(action)
         payload.setdefault("submitted_via", "openclaw_mcp")
+        payload.setdefault("source", "mcp")
         return self._service.propose_action(payload)
 
     def execute_manual_action(self, action: dict) -> dict:
         self._require_action_auth(action)
         payload = dict(action)
         payload.setdefault("submitted_via", "openclaw_mcp")
+        payload.setdefault("source", "mcp")
         return self._service.execute_manual_action(payload)
 
     def emergency_stop(self, payload: dict[str, Any]) -> dict:

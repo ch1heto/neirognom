@@ -88,7 +88,7 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(ack.status_code, "acked")
 
     def test_command_record_normalizes_action_and_binds_nonce(self) -> None:
-        harness = BackendTestHarness(command_ttl_sec=15)
+        harness = BackendTestHarness(command_ttl_sec=15, manual_command_ttl_sec=15)
         record = harness.validator.build_command_record(
             ActionProposal(
                 trace_id="trace-unit-normalize",
@@ -111,6 +111,44 @@ class BackendUnitTests(unittest.TestCase):
         self.assertEqual(record.metadata["zone_binding"], "tray_1")
         self.assertEqual(record.metadata["replay_window_ms"], 15_000)
         self.assertTrue(str(record.metadata["nonce"]).startswith("nonce-"))
+
+    def test_command_record_uses_origin_specific_ttls(self) -> None:
+        harness = BackendTestHarness(command_ttl_sec=20, manual_command_ttl_sec=9, mcp_command_ttl_sec=6)
+        operator_record = harness.validator.build_command_record(
+            ActionProposal(
+                trace_id="trace-unit-manual-ttl",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                actuator="irrigation_sequence",
+                action="START",
+                duration_sec=4,
+                origin=DecisionOrigin.OPERATOR,
+                reason="manual test",
+                requested_at_ms=10_000,
+                command_id="cmd-unit-manual-ttl",
+                metadata={"submitted_via": "operator_ui", "command_source": "operator"},
+            )
+        )
+        mcp_record = harness.validator.build_command_record(
+            ActionProposal(
+                trace_id="trace-unit-mcp-ttl",
+                device_id="esp32-1",
+                zone_id="tray_1",
+                actuator="irrigation_sequence",
+                action="START",
+                duration_sec=4,
+                origin=DecisionOrigin.MCP,
+                reason="mcp test",
+                requested_at_ms=10_000,
+                command_id="cmd-unit-mcp-ttl",
+                metadata={"submitted_via": "openclaw_mcp", "command_source": "mcp"},
+            )
+        )
+
+        self.assertEqual(operator_record.expires_at_ms, 19_000)
+        self.assertEqual(operator_record.metadata["command_ttl_sec"], 9)
+        self.assertEqual(mcp_record.expires_at_ms, 16_000)
+        self.assertEqual(mcp_record.metadata["command_ttl_sec"], 6)
 
     def test_safety_validator_rejects_offline_device(self) -> None:
         harness = BackendTestHarness()

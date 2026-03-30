@@ -80,7 +80,7 @@ class OpenClawMcpTests(unittest.TestCase):
         self.assertEqual(len(harness.mqtt.published), 0)
 
     def test_execute_manual_action_requires_auth_and_uses_backend_pipeline(self) -> None:
-        harness = BackendTestHarness()
+        harness = BackendTestHarness(mcp_command_ttl_sec=6)
         harness.seed_device_state(device_state_payload())
 
         denied = harness.mcp_server.handle_rpc(
@@ -122,9 +122,13 @@ class OpenClawMcpTests(unittest.TestCase):
         payload = allowed["result"]["content"][0]["json"]
         self.assertEqual(payload["status"], "DISPATCHED")
         self.assertEqual(harness.mqtt.published[-1]["payload"]["step"], "open_valve")
+        self.assertEqual(harness.mqtt.published[-1]["payload"]["ttl_sec"], 6)
+        self.assertEqual(harness.mqtt.published[-1]["payload"]["source"], "mcp")
         command = harness.command_status(payload["command_id"])
         assert command is not None
+        self.assertEqual(command["requested_by"], "mcp")
         self.assertEqual(command["metadata"]["submitted_via"], "openclaw_mcp")
+        self.assertEqual(command["metadata"]["command_source"], "mcp")
 
     def test_emergency_stop_flows_through_backend_service(self) -> None:
         harness = BackendTestHarness()

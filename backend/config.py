@@ -111,6 +111,9 @@ class GlobalSafetyConfig:
     flow_window_sec: int = 3600
     leak_shutdown_enabled: bool = True
     command_ttl_sec: int = 20
+    manual_command_ttl_sec: int = 10
+    mcp_command_ttl_sec: int = 8
+    max_manual_duration_sec: int = 10
     device_heartbeat_timeout_sec: int = 90
     broker_reconnect_lock_sec: int = 30
     anomaly_lookback_sec: int = 900
@@ -220,6 +223,9 @@ def load_backend_config() -> BackendConfig:
             flow_window_sec=int(os.getenv("FLOW_WINDOW_SEC", "3600")),
             leak_shutdown_enabled=os.getenv("LEAK_SHUTDOWN_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"},
             command_ttl_sec=int(os.getenv("COMMAND_TTL_SEC", "20")),
+            manual_command_ttl_sec=int(os.getenv("MANUAL_COMMAND_TTL_SEC", "10")),
+            mcp_command_ttl_sec=int(os.getenv("MCP_COMMAND_TTL_SEC", "8")),
+            max_manual_duration_sec=int(os.getenv("MAX_MANUAL_DURATION_SEC", "10")),
             device_heartbeat_timeout_sec=int(os.getenv("DEVICE_HEARTBEAT_TIMEOUT_SEC", "90")),
             broker_reconnect_lock_sec=int(os.getenv("BROKER_RECONNECT_LOCK_SEC", "30")),
             anomaly_lookback_sec=int(os.getenv("ANOMALY_LOOKBACK_SEC", "900")),

@@ -7,8 +7,34 @@ from tests.harness import BackendTestHarness
 
 
 class OperatorUiServiceTests(unittest.TestCase):
+    def test_manual_duration_clamp_and_metadata_are_preserved(self) -> None:
+        harness = BackendTestHarness(manual_command_ttl_sec=9, max_manual_duration_sec=6)
+        harness.seed_device_state(device_state_payload())
+
+        result = harness.operator.submit_manual_command(
+            {
+                "operator_id": "alice",
+                "operator_name": "Alice",
+                "zone_id": "tray_1",
+                "device_id": "esp32-1",
+                "ui_action": "test_watering",
+                "duration_sec": 12,
+            }
+        )
+
+        self.assertEqual(result["status"], "DISPATCHED")
+        self.assertEqual(harness.mqtt.published[-1]["payload"]["ttl_sec"], 9)
+        command = harness.command_status(result["command_id"])
+        assert command is not None
+        self.assertEqual(command["requested_payload"]["duration_sec"], 6)
+        self.assertEqual(command["metadata"]["requested_duration_sec"], 12)
+        self.assertEqual(command["metadata"]["effective_duration_sec"], 6)
+        self.assertEqual(command["metadata"]["manual_ttl_sec"], 9)
+        self.assertEqual(command["metadata"]["submitted_via"], "operator_ui")
+        self.assertEqual(command["metadata"]["command_source"], "operator")
+
     def test_submit_manual_command_uses_backend_pipeline_and_operator_metadata(self) -> None:
-        harness = BackendTestHarness()
+        harness = BackendTestHarness(manual_command_ttl_sec=7)
         harness.seed_device_state(device_state_payload())
 
         result = harness.operator.submit_manual_command(
@@ -24,11 +50,14 @@ class OperatorUiServiceTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "DISPATCHED")
         self.assertEqual(harness.mqtt.published[-1]["payload"]["step"], "open_valve")
+        self.assertEqual(harness.mqtt.published[-1]["payload"]["ttl_sec"], 7)
+        self.assertEqual(harness.mqtt.published[-1]["payload"]["source"], "operator")
         command = harness.command_status(result["command_id"])
         assert command is not None
         self.assertEqual(command["metadata"]["operator_id"], "alice")
         self.assertEqual(command["metadata"]["operator_name"], "Alice")
         self.assertEqual(command["metadata"]["submitted_via"], "operator_ui")
+        self.assertEqual(command["metadata"]["command_source"], "operator")
 
     def test_submit_manual_command_rejects_offline_device(self) -> None:
         harness = BackendTestHarness()

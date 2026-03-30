@@ -105,6 +105,9 @@ class MemoryStateStore:
             "flow_window_sec": global_safety.flow_window_sec,
             "leak_shutdown_enabled": global_safety.leak_shutdown_enabled,
             "command_ttl_sec": global_safety.command_ttl_sec,
+            "manual_command_ttl_sec": global_safety.manual_command_ttl_sec,
+            "mcp_command_ttl_sec": global_safety.mcp_command_ttl_sec,
+            "max_manual_duration_sec": global_safety.max_manual_duration_sec,
             "device_heartbeat_timeout_sec": global_safety.device_heartbeat_timeout_sec,
         }
         self.set_automation_flag(

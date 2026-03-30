@@ -92,7 +92,7 @@ class SafetyValidator:
             reasons.append(f"duration_not_allowed:{proposal.zone_id}")
 
         automation_enabled = current_state.get("automation_flags", {}).get("automation_enabled", {}).get("enabled", True)
-        if proposal.origin != DecisionOrigin.OPERATOR and not automation_enabled:
+        if not self._is_manual_origin(proposal.origin) and not automation_enabled:
             reasons.append("automation_disabled")
 
         if activating_action and current_state.get("global", {}).get("emergency_stop"):
@@ -339,7 +339,7 @@ class SafetyValidator:
         )
 
     def _manual_lease_allows(self, proposal: ActionProposal, lease: dict[str, Any]) -> bool:
-        if proposal.origin != DecisionOrigin.OPERATOR:
+        if not self._is_manual_origin(proposal.origin):
             return False
         operator_id = str(proposal.metadata.get("operator_id") or "")
         operator_name = str(proposal.metadata.get("operator_name") or "")
@@ -348,7 +348,8 @@ class SafetyValidator:
 
     def build_command_record(self, proposal: ActionProposal) -> CommandRecord:
         created_at_ms = proposal.requested_at_ms if proposal.requested_at_ms is not None else int(time.time() * 1000)
-        expires_at_ms = created_at_ms + self._config.global_safety.command_ttl_sec * 1000
+        ttl_sec = self._command_ttl_sec(proposal.origin)
+        expires_at_ms = created_at_ms + ttl_sec * 1000
         command_id = proposal.command_id or f"cmd-{uuid.uuid4().hex[:12]}"
         command_type = CommandType.IRRIGATE_ZONE if proposal.actuator == "irrigation_sequence" else CommandType.SET_ACTUATOR
         proposal_metadata = dict(proposal.metadata)
@@ -359,10 +360,15 @@ class SafetyValidator:
             "nonce": f"nonce-{uuid.uuid4().hex[:16]}",
             "device_binding": proposal.device_id,
             "zone_binding": proposal.zone_id,
-            "replay_window_ms": self._config.global_safety.command_ttl_sec * 1000,
+            "replay_window_ms": ttl_sec * 1000,
             "operator_id": proposal_metadata.get("operator_id"),
             "operator_name": proposal_metadata.get("operator_name"),
             "submitted_via": proposal_metadata.get("submitted_via"),
+            "command_source": proposal_metadata.get("command_source") or proposal.origin.value,
+            "command_ttl_sec": ttl_sec,
+            "requested_duration_sec": proposal_metadata.get("requested_duration_sec", requested_duration_sec),
+            "effective_duration_sec": proposal_metadata.get("effective_duration_sec", effective_duration_sec),
+            "manual_ttl_sec": proposal_metadata.get("manual_ttl_sec", ttl_sec if self._is_manual_origin(proposal.origin) else None),
             "topology": {
                 "pump_id": topology.pump_id if topology else "pump_main",
                 "line_id": topology.line_id if topology else "",
@@ -392,3 +398,14 @@ class SafetyValidator:
             },
             metadata=command_metadata,
         )
+
+    @staticmethod
+    def _is_manual_origin(origin: DecisionOrigin) -> bool:
+        return origin in {DecisionOrigin.OPERATOR, DecisionOrigin.MCP}
+
+    def _command_ttl_sec(self, origin: DecisionOrigin) -> int:
+        if origin == DecisionOrigin.MCP:
+            return int(self._config.global_safety.mcp_command_ttl_sec)
+        if origin == DecisionOrigin.OPERATOR:
+            return int(self._config.global_safety.manual_command_ttl_sec)
+        return int(self._config.global_safety.command_ttl_sec)

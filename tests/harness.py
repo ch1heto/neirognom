@@ -61,6 +61,9 @@ class BackendTestHarness:
         self,
         *,
         command_ttl_sec: int | None = None,
+        manual_command_ttl_sec: int | None = None,
+        mcp_command_ttl_sec: int | None = None,
+        max_manual_duration_sec: int | None = None,
         max_simultaneous_zones: int | None = None,
         max_active_lines: int | None = None,
         pump_cooldown_sec: int | None = None,
@@ -75,6 +78,12 @@ class BackendTestHarness:
         ingestion_policy = config.ingestion
         if command_ttl_sec is not None:
             global_safety = replace(global_safety, command_ttl_sec=command_ttl_sec)
+        if manual_command_ttl_sec is not None:
+            global_safety = replace(global_safety, manual_command_ttl_sec=manual_command_ttl_sec)
+        if mcp_command_ttl_sec is not None:
+            global_safety = replace(global_safety, mcp_command_ttl_sec=mcp_command_ttl_sec)
+        if max_manual_duration_sec is not None:
+            global_safety = replace(global_safety, max_manual_duration_sec=max_manual_duration_sec)
         if max_simultaneous_zones is not None:
             global_safety = replace(global_safety, max_simultaneous_zones=max_simultaneous_zones)
         if max_active_lines is not None:

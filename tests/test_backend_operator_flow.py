@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import unittest
 from unittest import mock
 
@@ -9,6 +10,33 @@ from tests.harness import BackendTestHarness
 
 
 class BackendOperatorFlowTests(unittest.TestCase):
+    def test_operator_ui_manual_command_uses_manual_ttl_and_operator_source(self) -> None:
+        harness = BackendTestHarness(manual_command_ttl_sec=9)
+        harness.seed_device_state(device_state_payload())
+        now_ms = int(time.time() * 1000)
+
+        response = harness.execute_manual_action(
+            {
+                "trace_id": "trace-manual-ttl-0001",
+                "command_id": "cmd-manual-ttl-0001",
+                "device_id": "esp32-1",
+                "zone_id": "tray_1",
+                "actuator": "irrigation_sequence",
+                "action": "START",
+                "duration_sec": 3,
+                "requested_at_ms": now_ms,
+                "metadata": {"submitted_via": "operator_ui", "command_source": "operator"},
+            }
+        )
+
+        self.assertEqual(response["status"], CommandLifecycle.DISPATCHED.value)
+        self.assertEqual(harness.last_command_message()["ttl_sec"], 9)
+        self.assertEqual(harness.last_command_message()["source"], "operator")
+        status = harness.command_status("cmd-manual-ttl-0001")
+        assert status is not None
+        self.assertEqual(status["requested_by"], "operator")
+        self.assertEqual(status["metadata"]["command_source"], "operator")
+
     def test_manual_operator_action_uses_same_dispatch_pipeline(self) -> None:
         harness = BackendTestHarness()
         harness.seed_device_state(device_state_payload())
@@ -67,6 +95,8 @@ class BackendOperatorFlowTests(unittest.TestCase):
         status = harness.command_status("cmd-manual-flow-0001")
         assert status is not None
         self.assertEqual(status["requested_by"], "operator")
+        self.assertEqual(status["metadata"]["submitted_via"], "operator_ui")
+        self.assertEqual(status["metadata"]["command_source"], "operator")
         self.assertEqual(status["lifecycle"], CommandLifecycle.COMPLETED.value)
         self.assertEqual(status["execution"]["phase"], "FINISHED")
 

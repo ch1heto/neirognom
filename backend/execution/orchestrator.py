@@ -353,11 +353,12 @@ class IrrigationOrchestrator:
             return {"status": "missing_command"}
         created_at_ms = int(time.time() * 1000)
         ttl_sec = max(0, (int(command["expires_at_ms"]) - created_at_ms + 999) // 1000)
+        command_source = str(command.get("metadata", {}).get("command_source") or command.get("requested_by") or "backend")
         message = ActuatorCommandMessage(
             message_id=f"msg-{uuid.uuid4().hex[:12]}",
             command_id=command_id,
             correlation_id=command["trace_id"],
-            source=str(command.get("requested_by") or "backend"),
+            source=command_source,
             target_device_id=command["device_id"],
             target_zone_id=command["zone_id"],
             action=action,
